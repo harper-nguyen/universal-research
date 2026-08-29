@@ -1,4 +1,5 @@
 import os
+import io
 import streamlit as st
 from google import genai
 from google.genai import types
@@ -23,41 +24,114 @@ st.markdown("""
     }
     h1 {
         font-weight: 600 !important;
-        margin-bottom: 0.5rem !important;
+        margin-bottom: 0.25rem !important;
         letter-spacing: -0.02em;
     }
     .subtitle {
-        color: #666666;
-        font-size: 1.1rem;
+        color: #888;
+        font-size: 1rem;
         margin-bottom: 2rem;
+    }
+    .model-badge {
+        display: inline-block;
+        background: #f0f0f0;
+        color: #555;
+        font-size: 0.75rem;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-family: monospace;
     }
 </style>
 """, unsafe_allow_html=True)
 
+# Models to try in priority order (most capable first)
+CANDIDATE_MODELS = [
+    "gemini-3.6-flash",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.0-flash",
+]
+
 def get_api_key():
-    """Read API key from st.secrets (Streamlit Cloud) or environment variable (local)."""
     try:
         return st.secrets["GEMINI_API_KEY"]
     except Exception:
         return os.environ.get("GEMINI_API_KEY", "")
 
 def get_skill_content():
-    """Load SKILL.md from the same directory as app.py."""
     skill_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "SKILL.md")
     try:
         with open(skill_path, "r", encoding="utf-8") as f:
             return f.read()
     except Exception:
-        st.error(f"Could not load SKILL.md. Ensure it exists at: {skill_path}")
+        st.error(f"Could not load SKILL.md at: {skill_path}")
         return None
+
+def run_research(client, skill_content, prompt, use_search=True):
+    """Try candidate models in order. Returns (response_text, model_used, sources)."""
+    tools = [{"google_search": {}}] if use_search else []
+    last_error = None
+
+    for model in CANDIDATE_MODELS:
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=skill_content,
+                    tools=tools,
+                    temperature=0.2,
+                ),
+            )
+            # Extract sources
+            sources = []
+            try:
+                chunks = response.candidates[0].grounding_metadata.grounding_chunks
+                for chunk in (chunks or []):
+                    if hasattr(chunk, "web") and chunk.web:
+                        sources.append({"title": chunk.web.title, "uri": chunk.web.uri})
+            except Exception:
+                pass
+            return response.text, model, sources
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                # Quota hit — surface to user, no point trying other models
+                raise RuntimeError(
+                    f"Rate limit reached on `{model}`. "
+                    "The free tier allows ~15 requests/minute. Please wait 1 minute and try again."
+                )
+            # 404 / not found — silently try next model
+            last_error = e
+            continue
+
+    # All models exhausted — retry without search if we were using it
+    if use_search:
+        return run_research(client, skill_content, prompt, use_search=False)
+
+    raise RuntimeError(f"No available model responded. Last error: {last_error}")
+
+def build_markdown_report(question, result_text, model_used, sources):
+    lines = [
+        f"# Research Report\n",
+        f"**Question:** {question}\n",
+        f"**Model:** `{model_used}`\n",
+        "---\n",
+        result_text,
+    ]
+    if sources:
+        lines.append("\n---\n## Sources Referenced\n")
+        for s in sources:
+            lines.append(f"- [{s['title']}]({s['uri']})")
+    return "\n".join(lines)
 
 def main():
     st.markdown("<h1>Universal Research</h1>", unsafe_allow_html=True)
-    st.markdown('<div class="subtitle">Evidence-based analysis driven by the Universal Research Skill.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtitle">Evidence-based analysis · Universal Research Skill v0.1.1</div>', unsafe_allow_html=True)
 
     api_key = get_api_key()
     if not api_key:
-        st.error("API Key not found. Set GEMINI_API_KEY in Streamlit Secrets (cloud) or in your .env file (local).")
+        st.error("API Key not configured. Set `GEMINI_API_KEY` in Streamlit Secrets (cloud) or `.env` (local).")
         st.stop()
 
     skill_content = get_skill_content()
@@ -70,70 +144,73 @@ def main():
         st.markdown("### Settings")
         depth = st.radio("Analysis Depth", ["Quick Summary", "Standard", "Deep Dive"], index=1)
         st.markdown("---")
-        st.markdown("<small>System Engine: <code>universal-research v0.1.1</code></small>", unsafe_allow_html=True)
+        st.markdown("<small>Skill: <code>universal-research v0.1.1</code></small>", unsafe_allow_html=True)
+        st.markdown("<small>Models: auto-selected</small>", unsafe_allow_html=True)
 
     question = st.text_area(
         "",
-        placeholder="Enter your research question (e.g., What are the main factors affecting FDI in developing countries?)",
-        height=120
+        placeholder="Enter your research question…",
+        height=120,
     )
 
-    if st.button("Run Analysis", type="primary"):
+    col1, col2 = st.columns([1, 5])
+    run_clicked = col1.button("Run Analysis", type="primary")
+
+    if run_clicked:
         if not question.strip():
             st.warning("Please enter a research question.")
             return
 
         depth_prompt = {
-            "Quick Summary": "Perform a quick analysis. Provide a concise, well-structured summary.",
+            "Quick Summary": "Provide a concise, well-structured summary.",
             "Standard": "Perform a standard, balanced research analysis.",
             "Deep Dive": "Perform a deep, comprehensive analysis with detailed synthesis of evidence, methodology, and limitations.",
         }.get(depth, "")
 
         full_prompt = (
             f"Research Task: {question}\n\n"
-            f"Constraints: {depth_prompt}\n\n"
+            f"Depth constraint: {depth_prompt}\n\n"
             "Output your response in Markdown using this structure: "
             "Executive Summary, Key Findings, Evidence & Sources, "
             "Contradictory/Uncertain Evidence, Analysis, Conclusion, Limitations. "
             "Adapt the structure if the question warrants a different format."
         )
 
-        with st.spinner("Analyzing..."):
+        with st.spinner("Analyzing…"):
             try:
-                response = client.models.generate_content(
-                    model="gemini-3.6-flash",
-                    contents=full_prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=skill_content,
-                        tools=[{"google_search": {}}],
-                        temperature=0.2,
-                    ),
-                )
+                result_text, model_used, sources = run_research(client, skill_content, full_prompt)
 
                 st.markdown("---")
-                st.markdown("### Analysis Report")
-                st.markdown(response.text)
+                st.markdown(
+                    f"**Analysis complete** · <span class='model-badge'>{model_used}</span>",
+                    unsafe_allow_html=True,
+                )
+                st.markdown("### Report")
+                st.markdown(result_text)
 
-                # Sources from Google Search grounding
-                try:
-                    chunks = response.candidates[0].grounding_metadata.grounding_chunks
-                    if chunks:
-                        st.markdown("#### Sources referenced")
-                        for chunk in chunks:
-                            if hasattr(chunk, "web") and chunk.web:
-                                st.markdown(
-                                    f"<small>• <a href='{chunk.web.uri}' target='_blank' "
-                                    f"style='color:#666; text-decoration:none;'>{chunk.web.title}</a></small>",
-                                    unsafe_allow_html=True,
-                                )
-                except Exception:
-                    pass
+                if sources:
+                    st.markdown("#### Sources referenced")
+                    for s in sources:
+                        st.markdown(
+                            f"<small>· <a href='{s['uri']}' target='_blank' style='color:#666;text-decoration:none'>{s['title']}</a></small>",
+                            unsafe_allow_html=True,
+                        )
 
+                # Export button
+                md_report = build_markdown_report(question, result_text, model_used, sources)
+                st.download_button(
+                    label="Download report (.md)",
+                    data=md_report.encode("utf-8"),
+                    file_name="research-report.md",
+                    mime="text/markdown",
+                )
+
+            except RuntimeError as e:
+                st.warning(str(e))
             except Exception as e:
-                st.error(f"Analysis failed: {e}")
+                st.error(f"Unexpected error: {e}")
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
     main()
-
