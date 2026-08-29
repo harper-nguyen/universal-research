@@ -59,12 +59,21 @@ def get_api_key():
         return os.environ.get("GEMINI_API_KEY", "")
 
 def get_skill_content():
-    skill_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "SKILL.md")
+    """Load the canonical SKILL.md from research/SKILL.md (one level up from app.py)."""
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    skill_path = os.path.normpath(os.path.join(app_dir, "..", "SKILL.md"))
     try:
         with open(skill_path, "r", encoding="utf-8") as f:
-            return f.read()
-    except Exception:
-        st.error(f"Could not load SKILL.md at: {skill_path}")
+            content = f.read()
+        if not content.strip():
+            st.error(f"SKILL.md loaded from {skill_path} but is empty.")
+            return None
+        return content
+    except FileNotFoundError:
+        st.error(f"SKILL.md not found at: {skill_path}\nExpected canonical path: research/SKILL.md")
+        return None
+    except Exception as e:
+        st.error(f"Could not load SKILL.md: {e}")
         return None
 
 # Models to try WITH Google Search (requires v1beta, newer models only)

@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 .DS_Store
 .streamlit/secrets.toml
+# SKILL.md must NOT be copied here — load from canonical ../SKILL.md
+SKILL.md
