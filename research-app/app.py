@@ -67,12 +67,29 @@ def get_skill_content():
         st.error(f"Could not load SKILL.md at: {skill_path}")
         return None
 
+# Models to try WITH Google Search (requires v1beta, newer models only)
+MODELS_WITH_SEARCH = [
+    "gemini-3.6-flash",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+]
+
+# Models to try WITHOUT search (broader compatibility)
+MODELS_NO_SEARCH = [
+    "gemini-3.6-flash",
+    "gemini-2.5-flash",
+    "gemini-1.5-pro",
+    "gemini-1.5-flash",
+    "gemini-1.0-pro",
+]
+
 def run_research(client, skill_content, prompt, use_search=True):
     """Try candidate models in order. Returns (response_text, model_used, sources)."""
+    model_list = MODELS_WITH_SEARCH if use_search else MODELS_NO_SEARCH
     tools = [{"google_search": {}}] if use_search else []
-    last_error = None
+    errors = []
 
-    for model in CANDIDATE_MODELS:
+    for model in model_list:
         try:
             response = client.models.generate_content(
                 model=model,
@@ -94,22 +111,18 @@ def run_research(client, skill_content, prompt, use_search=True):
                 pass
             return response.text, model, sources
         except Exception as e:
-            err_str = str(e)
-            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                # Quota hit — surface to user, no point trying other models
-                raise RuntimeError(
-                    f"Rate limit reached on `{model}`. "
-                    "The free tier allows ~15 requests/minute. Please wait 1 minute and try again."
-                )
-            # 404 / not found — silently try next model
-            last_error = e
-            continue
+            errors.append(f"{model}: {e}")
+            continue  # Always try next model regardless of error type
 
-    # All models exhausted — retry without search if we were using it
+    # All models with search failed — retry without search
     if use_search:
+        st.info("ℹ️ Web search unavailable; falling back to knowledge-base analysis.")
         return run_research(client, skill_content, prompt, use_search=False)
 
-    raise RuntimeError(f"No available model responded. Last error: {last_error}")
+    raise RuntimeError(
+        "All models exhausted. This may be a daily quota limit on your free tier API key. "
+        "Details:\n" + "\n".join(errors)
+    )
 
 def build_markdown_report(question, result_text, model_used, sources):
     lines = [
