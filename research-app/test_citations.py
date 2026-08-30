@@ -237,6 +237,18 @@ check("Adversarial 9: Source cited multiple times inserts marker at both positio
 adv_srcs_10, adv_map_10 = build_source_list(None)
 check("Adversarial 10: None grounding chunks returns empty sources list", len(adv_srcs_10) == 0 and len(adv_map_10) == 0)
 
+# HTML Export Test
+html_out = citations.build_html_report(
+    question="Test Question?",
+    result_text="This is a **bold** statement [1].",
+    model_used="gemini-3.6-flash",
+    sources=[Source(1, title="Sample Study", url="https://example.com/study")],
+)
+check("HTML Export: contains DOCTYPE and title", "<!DOCTYPE html>" in html_out and "Test Question?" in html_out)
+check("HTML Export: converts inline citation to sup tag", "<sup class='cite-tag'>[1]</sup>" in html_out)
+check("HTML Export: contains references list", "id='ref-1'" in html_out and "Sample Study." in html_out)
+
+
 
 # ---------------------------------------------------------------------------
 # Summary

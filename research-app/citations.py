@@ -19,6 +19,8 @@ for future enrichment (Crossref, OpenAlex, Semantic Scholar).
 
 from __future__ import annotations
 
+import re
+import html
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -312,3 +314,277 @@ def annotate_text_with_citations(
         text = text[:end_idx] + marker + text[end_idx:]
 
     return text, True
+
+
+# ---------------------------------------------------------------------------
+# HTML & Multi-Format Export
+# ---------------------------------------------------------------------------
+
+def build_html_report(
+    question: str,
+    result_text: str,
+    model_used: str,
+    sources: List[Source],
+    ref_markdown: str = "",
+) -> str:
+    """
+    Build a standalone, beautifully styled HTML report suitable for printing (PDF)
+    or sharing. Uses modern typography and CSS print media queries.
+    """
+    import html
+
+    safe_question = html.escape(question)
+    safe_model = html.escape(model_used)
+
+    # Basic markdown to HTML formatting for headers, bold, italics, lists, and line breaks
+    def simple_md_to_html(md: str) -> str:
+        lines = md.split("\n")
+        html_lines = []
+        in_list = False
+
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                if in_list:
+                    html_lines.append("</ul>")
+                    in_list = False
+                html_lines.append("<br/>")
+                continue
+
+            if stripped.startswith("### "):
+                if in_list:
+                    html_lines.append("</ul>")
+                    in_list = False
+                html_lines.append(f"<h3>{html.escape(stripped[4:])}</h3>")
+            elif stripped.startswith("## "):
+                if in_list:
+                    html_lines.append("</ul>")
+                    in_list = False
+                html_lines.append(f"<h2>{html.escape(stripped[3:])}</h2>")
+            elif stripped.startswith("# "):
+                if in_list:
+                    html_lines.append("</ul>")
+                    in_list = False
+                html_lines.append(f"<h1>{html.escape(stripped[2:])}</h1>")
+            elif stripped.startswith("- ") or stripped.startswith("* "):
+                if not in_list:
+                    html_lines.append("<ul>")
+                    in_list = True
+                content = html.escape(stripped[2:])
+                # Replace inline bold
+                content = re.sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", content)
+                html_lines.append(f"<li>{content}</li>")
+            elif stripped.startswith("---"):
+                if in_list:
+                    html_lines.append("</ul>")
+                    in_list = False
+                html_lines.append("<hr/>")
+            else:
+                if in_list:
+                    html_lines.append("</ul>")
+                    in_list = False
+                content = html.escape(line)
+                content = re.sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", content)
+                content = re.sub(r"\*(.*?)\*", r"<em>\1</em>", content)
+                content = re.sub(r"\[(\d+)\]", r"<sup class='cite-tag'>[\1]</sup>", content)
+                html_lines.append(f"<p>{content}</p>")
+
+        if in_list:
+            html_lines.append("</ul>")
+        return "\n".join(html_lines)
+
+    body_html = simple_md_to_html(result_text)
+
+    # References list
+    ref_items = []
+    for s in sorted(sources, key=lambda x: x.citation_id):
+        apa = format_apa7(s)
+        # Linkify URL
+        if s.url:
+            apa = apa.replace(s.url, f"<a href='{html.escape(s.url)}' target='_blank'>{html.escape(s.url)}</a>")
+        badge = f"<span class='badge badge-{s.metadata_confidence}'>{s.metadata_confidence.upper()}</span>"
+        ref_items.append(f"<li id='ref-{s.citation_id}'><strong>[{s.citation_id}]</strong> {apa} {badge}</li>")
+
+    refs_html = "".join(ref_items) if ref_items else "<li>No external sources cited.</li>"
+
+    return f"""<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Báo cáo nghiên cứu — {safe_question[:50]}</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&display=swap');
+
+        body {{
+            font-family: 'Newsreader', Georgia, serif;
+            font-size: 18px;
+            line-height: 1.7;
+            color: #1a1a1a;
+            background-color: #ffffff;
+            margin: 0;
+            padding: 40px 20px;
+        }}
+
+        .container {{
+            max-width: 820px;
+            margin: 0 auto;
+        }}
+
+        .header {{
+            font-family: 'Inter', sans-serif;
+            border-bottom: 2px solid #eaeaea;
+            padding-bottom: 24px;
+            margin-bottom: 32px;
+        }}
+
+        .title {{
+            font-size: 28px;
+            font-weight: 700;
+            color: #111;
+            margin: 0 0 12px 0;
+            line-height: 1.3;
+        }}
+
+        .meta-bar {{
+            display: flex;
+            gap: 16px;
+            font-size: 13px;
+            color: #666;
+            flex-wrap: wrap;
+        }}
+
+        .meta-item strong {{
+            color: #333;
+        }}
+
+        h1, h2, h3, h4 {{
+            font-family: 'Inter', sans-serif;
+            color: #111;
+            margin-top: 36px;
+            margin-bottom: 14px;
+        }}
+
+        h1 {{ font-size: 24px; border-bottom: 1px solid #eee; padding-bottom: 8px; }}
+        h2 {{ font-size: 20px; }}
+        h3 {{ font-size: 17px; }}
+
+        p {{
+            margin: 0 0 16px 0;
+        }}
+
+        ul {{
+            padding-left: 24px;
+            margin-bottom: 18px;
+        }}
+
+        li {{
+            margin-bottom: 8px;
+        }}
+
+        hr {{
+            border: none;
+            border-top: 1px solid #eee;
+            margin: 32px 0;
+        }}
+
+        .cite-tag {{
+            font-family: 'Inter', sans-serif;
+            font-size: 11px;
+            font-weight: 600;
+            color: #1a73e8;
+            margin-left: 2px;
+        }}
+
+        .references-section {{
+            margin-top: 48px;
+            padding-top: 24px;
+            border-top: 2px solid #111;
+        }}
+
+        .references-list {{
+            list-style: none;
+            padding: 0;
+        }}
+
+        .references-list li {{
+            font-size: 15px;
+            line-height: 1.6;
+            margin-bottom: 14px;
+            padding-left: 28px;
+            text-indent: -28px;
+            color: #333;
+        }}
+
+        .references-list a {{
+            color: #1a73e8;
+            text-decoration: none;
+            word-break: break-all;
+        }}
+
+        .references-list a:hover {{
+            text-decoration: underline;
+        }}
+
+        .badge {{
+            font-family: 'Inter', sans-serif;
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 4px;
+            margin-left: 6px;
+            vertical-align: middle;
+        }}
+
+        .badge-high {{ background: #e6f4ea; color: #137333; }}
+        .badge-medium {{ background: #fef7e0; color: #b06000; }}
+        .badge-low {{ background: #f1f3f4; color: #5f6368; }}
+
+        .footer {{
+            font-family: 'Inter', sans-serif;
+            font-size: 12px;
+            color: #888;
+            text-align: center;
+            margin-top: 60px;
+            border-top: 1px solid #eee;
+            padding-top: 20px;
+        }}
+
+        @media print {{
+            body {{ padding: 0; font-size: 15px; }}
+            .container {{ max-width: 100%; }}
+            .header {{ border-bottom-color: #000; }}
+            a {{ color: #000 !important; text-decoration: none !important; }}
+            .badge {{ border: 1px solid #ccc; }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 class="title">Báo cáo nghiên cứu học thuật</h1>
+            <div class="meta-bar">
+                <div class="meta-item"><strong>Câu hỏi:</strong> {safe_question}</div>
+                <div class="meta-item"><strong>Mô hình:</strong> <code>{safe_model}</code></div>
+                <div class="meta-item"><strong>Nguồn trích dẫn:</strong> {len(sources)} tài liệu</div>
+            </div>
+        </div>
+
+        <div class="content">
+            {body_html}
+        </div>
+
+        <div class="references-section">
+            <h2>Tài liệu tham khảo (References - APA 7)</h2>
+            <ul class="references-list">
+                {refs_html}
+            </ul>
+        </div>
+
+        <div class="footer">
+            Báo cáo được tạo tự động bởi <strong>Universal Research v0.4</strong> &middot; Xác minh bằng chứng bởi Gemini AI &amp; OpenAlex/Crossref
+        </div>
+    </div>
+</body>
+</html>
+"""
