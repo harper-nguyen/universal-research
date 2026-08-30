@@ -184,8 +184,7 @@ def main():
         st.markdown("### Citation Settings")
         citation_style = st.selectbox("Citation Style", ["APA 7"], index=0)
         st.markdown("---")
-        st.markdown("<small>Skill: <code>universal-research v0.1.1</code></small>", unsafe_allow_html=True)
-        st.markdown("<small>Citations: <code>v0.3 — Academic Enrichment</code></small>", unsafe_allow_html=True)
+        st.markdown("<small>Universal Research &middot; <code>v0.3</code></small>", unsafe_allow_html=True)
 
     question = st.text_area(
         "",
