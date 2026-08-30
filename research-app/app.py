@@ -162,9 +162,11 @@ def build_markdown_report(question, result_text, model_used, sources, ref_markdo
             lines.append(f"[{s.citation_id}] {apa}")
     return "\n".join(lines)
 
+from datetime import datetime
+
 def main():
     st.markdown("<h1>Universal Research</h1>", unsafe_allow_html=True)
-    st.markdown('<div class="subtitle">Evidence-based analysis · Universal Research Skill v0.3 — Academic Metadata Enrichment</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtitle">Evidence-based analysis · Universal Research Skill v0.3.5 — Academic Enrichment & Session Hub</div>', unsafe_allow_html=True)
 
     api_key = get_api_key()
     if not api_key:
@@ -177,6 +179,12 @@ def main():
 
     client = genai.Client(api_key=api_key)
 
+    # Initialize session history
+    if "history" not in st.session_state:
+        st.session_state["history"] = []
+    if "active_report" not in st.session_state:
+        st.session_state["active_report"] = None
+
     with st.sidebar:
         st.markdown("### Settings")
         depth = st.radio("Analysis Depth", ["Quick Summary", "Standard", "Deep Dive"], index=1)
@@ -184,7 +192,25 @@ def main():
         st.markdown("### Citation Settings")
         citation_style = st.selectbox("Citation Style", ["APA 7"], index=0)
         st.markdown("---")
-        st.markdown("<small>Universal Research &middot; <code>v0.3</code></small>", unsafe_allow_html=True)
+
+        # Session History section
+        st.markdown("### 📜 Lịch sử phiên")
+        if st.session_state["history"]:
+            for idx, item in enumerate(reversed(st.session_state["history"])):
+                q_snippet = (item['question'][:32] + "…") if len(item['question']) > 32 else item['question']
+                time_str = item.get("timestamp", "")
+                if st.button(f"📄 {q_snippet}", key=f"hist_{idx}", help=f"{time_str}\n{item['question']}"):
+                    st.session_state["active_report"] = item
+
+            if st.button("🗑️ Xóa lịch sử", type="secondary"):
+                st.session_state["history"] = []
+                st.session_state["active_report"] = None
+                st.rerun()
+        else:
+            st.markdown("<small style='color:#888'>Chưa có báo cáo nào trong phiên này.</small>", unsafe_allow_html=True)
+
+        st.markdown("---")
+        st.markdown("<small>Universal Research &middot; <code>v0.3.5</code></small>", unsafe_allow_html=True)
 
     question = st.text_area(
         "",
@@ -221,34 +247,57 @@ def main():
                     client, skill_content, full_prompt
                 )
 
-                st.markdown("---")
-                st.markdown(
-                    f"**Analysis complete** · <span class='model-badge'>{model_used}</span>",
-                    unsafe_allow_html=True,
-                )
-                st.markdown("### Report")
-                st.markdown(result_text)
-
-                if ref_markdown and "## References" not in result_text:
-                    st.markdown("---")
-                    st.markdown(ref_markdown)
-
-                # Export button
-                md_report = build_markdown_report(question, result_text, model_used, sources, ref_markdown)
-                st.download_button(
-                    label="Download report (.md)",
-                    data=md_report.encode("utf-8"),
-                    file_name="research-report.md",
-                    mime="text/markdown",
-                )
+                # Save to history
+                report_data = {
+                    "question": question,
+                    "result_text": result_text,
+                    "model_used": model_used,
+                    "sources": sources,
+                    "ref_markdown": ref_markdown,
+                    "timestamp": datetime.now().strftime("%H:%M:%S"),
+                }
+                st.session_state["history"].append(report_data)
+                st.session_state["active_report"] = report_data
 
             except RuntimeError as e:
                 st.warning(str(e))
             except Exception as e:
                 st.error(f"Unexpected error: {e}")
 
+    # Render active report if available
+    active = st.session_state.get("active_report")
+    if active:
+        st.markdown("---")
+        st.markdown(
+            f"**Research Report** · <span class='model-badge'>{active['model_used']}</span> · <small style='color:#888'>{active.get('timestamp', '')}</small>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(f"**Question:** *{active['question']}*")
+        st.markdown("### Report")
+        st.markdown(active["result_text"])
+
+        if active.get("ref_markdown") and "## References" not in active["result_text"]:
+            st.markdown("---")
+            st.markdown(active["ref_markdown"])
+
+        # Export button
+        md_report = build_markdown_report(
+            active["question"],
+            active["result_text"],
+            active["model_used"],
+            active.get("sources", []),
+            active.get("ref_markdown", ""),
+        )
+        st.download_button(
+            label="Download report (.md)",
+            data=md_report.encode("utf-8"),
+            file_name="research-report.md",
+            mime="text/markdown",
+        )
+
 if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
     main()
+
 

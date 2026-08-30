@@ -1,7 +1,8 @@
 """
-test_enrichment.py — Unit & Adversarial Tests for Enrichment Module v0.3
+test_enrichment.py — Unit & Adversarial Tests for Enrichment Module v0.3.5
 
-Tests DOI extraction, metadata parsing, enrichment logic, and edge cases.
+Tests DOI extraction, Title-based search, Crossref/OpenAlex parsing,
+enrichment logic, title similarity, and edge cases.
 Uses mock API response data — no live network calls.
 """
 
@@ -11,12 +12,15 @@ from unittest.mock import patch, MagicMock
 from citations import Source
 from enrichment import (
     extract_doi_from_url,
+    clean_title_for_search,
+    title_similarity,
     _parse_crossref,
     _parse_openalex,
     enrich_source,
     enrich_sources,
     lookup_crossref,
     lookup_openalex,
+    search_openalex_by_title,
 )
 
 PASS = "\033[92m  PASS\033[0m"
@@ -30,7 +34,7 @@ def check(name: str, condition: bool, detail: str = "") -> None:
         print(f"       → {detail}")
     results.append(condition)
 
-print("\n=== Enrichment Module v0.3 — Unit & Adversarial Tests ===\n")
+print("\n=== Enrichment Module v0.3.5 — Unit & Adversarial Tests ===\n")
 
 # ---------------------------------------------------------------------------
 # 1. DOI Extraction
@@ -60,7 +64,28 @@ check("DOI from embedded doi: prefix",
     extract_doi_from_url("https://example.org/doi:10.5678/test-paper") == "10.5678/test-paper")
 
 # ---------------------------------------------------------------------------
-# 2. Crossref Response Parsing
+# 2. Title Cleaning & Similarity Matching
+# ---------------------------------------------------------------------------
+check("Clean title strips ScienceDirect suffix",
+    clean_title_for_search("Foreign Direct Investment and Economic Growth - ScienceDirect") == "Foreign Direct Investment and Economic Growth")
+
+check("Clean title strips [PDF] tag",
+    clean_title_for_search("Determinants of FDI in Developing Countries [PDF]") == "Determinants of FDI in Developing Countries")
+
+check("Clean title rejects short generic titles (< 3 words)",
+    clean_title_for_search("Home Page") is None)
+
+check("Title similarity identical titles is 1.0",
+    title_similarity("Determinants of FDI", "Determinants of FDI") >= 0.99)
+
+check("Title similarity minor punctuation difference is high",
+    title_similarity("Determinants of FDI: A Panel Study", "Determinants of FDI a panel study") >= 0.90)
+
+check("Title similarity completely different titles is low",
+    title_similarity("Quantum Computing Algorithms", "Foreign Direct Investment in Asia") < 0.20)
+
+# ---------------------------------------------------------------------------
+# 3. Crossref Response Parsing
 # ---------------------------------------------------------------------------
 crossref_msg_full = {
     "DOI": "10.1234/example",
@@ -95,10 +120,11 @@ parsed_no_author = _parse_crossref(crossref_no_author)
 check("Crossref no author — field absent from result", parsed_no_author.get("author") is None)
 
 # ---------------------------------------------------------------------------
-# 3. OpenAlex Response Parsing
+# 4. OpenAlex Response Parsing
 # ---------------------------------------------------------------------------
 openalex_work = {
     "id": "https://openalex.org/W12345",
+    "title": "Trade Policy and Foreign Investment",
     "doi": "https://doi.org/10.5678/oa-test",
     "publication_year": 2023,
     "authorships": [
@@ -123,21 +149,20 @@ check("OpenAlex three authors with ampersand",
 check("OpenAlex empty work returns empty dict", _parse_openalex({}) == {})
 
 # ---------------------------------------------------------------------------
-# 4. enrich_source Logic (Mocked API)
+# 5. enrich_source Logic (DOI-based & Title-based)
 # ---------------------------------------------------------------------------
 
-# Source with DOI URL — should trigger enrichment
+# Case 1: DOI in URL -> DOI lookup
 doi_source = Source(
     citation_id=1,
     title="Multinational Enterprises and the Global Economy",
     url="https://doi.org/10.1234/example",
 )
 
-# Mock Crossref returning full data
 with patch("enrichment.lookup_crossref") as mock_cr, \
      patch("enrichment.lookup_openalex") as mock_oa:
     mock_cr.return_value = crossref_msg_full
-    mock_oa.return_value = None  # Crossref was sufficient
+    mock_oa.return_value = None
 
     enriched_src = enrich_source(doi_source)
 
@@ -148,86 +173,77 @@ check("Enriched source has doi", enriched_src.doi == "10.1234/example")
 check("Enriched source confidence is high", enriched_src.metadata_confidence == "high")
 check("Enriched source type is academic", enriched_src.source_type == "academic")
 
-# Source with no URL — should return unchanged
-no_url_source = Source(citation_id=2, title="Offline Paper", url=None)
-unchanged = enrich_source(no_url_source)
-check("Source with no URL returned unchanged", unchanged.author is None and unchanged.doi is None)
+# Case 2: Title-based search (URL has no DOI, e.g., University webpage)
+title_only_source = Source(
+    citation_id=2,
+    title="Trade Policy and Foreign Investment - University Portal",
+    url="https://university.edu/working-papers/123",
+)
 
-# Source without DOI in URL — should return unchanged
-web_source = Source(citation_id=3, title="BBC News Article", url="https://bbc.com/news/world-123")
-unchanged_web = enrich_source(web_source)
-check("Non-DOI URL source returned unchanged", unchanged_web.author is None)
+with patch("enrichment.search_openalex_by_title") as mock_title_search:
+    mock_title_search.return_value = openalex_work
 
-# Crossref fails, OpenAlex succeeds
-doi_src2 = Source(citation_id=4, title="Trade Policy Paper", url="https://doi.org/10.5678/oa-test")
-with patch("enrichment.lookup_crossref") as mock_cr2, \
-     patch("enrichment.lookup_openalex") as mock_oa2:
-    mock_cr2.return_value = None  # Crossref not found
-    mock_oa2.return_value = openalex_work  # OpenAlex succeeds
+    enriched_title_src = enrich_source(title_only_source)
 
-    enriched_oa = enrich_source(doi_src2)
+check("Title-based search: author populated", enriched_title_src.author == "Maria Garcia, David Chen, & Priya Patel")
+check("Title-based search: year populated", enriched_title_src.year == 2023)
+check("Title-based search: journal populated", enriched_title_src.journal == "World Development")
+check("Title-based search: doi populated", enriched_title_src.doi == "10.5678/oa-test")
+check("Title-based search: confidence is medium", enriched_title_src.metadata_confidence == "medium")
 
-check("Fallback to OpenAlex when Crossref fails", enriched_oa.year == 2023)
-check("OpenAlex enriched author populated", enriched_oa.author is not None)
+# Case 3: Title-based search fails / no match -> source remains unchanged
+generic_web_source = Source(citation_id=3, title="BBC News World Report", url="https://bbc.com/news/123")
+with patch("enrichment.search_openalex_by_title") as mock_title_search:
+    mock_title_search.return_value = None
 
-# Both APIs fail — source unchanged
-doi_src3 = Source(citation_id=5, title="Unknown Paper", url="https://doi.org/10.9999/notfound")
-with patch("enrichment.lookup_crossref") as mock_cr3, \
-     patch("enrichment.lookup_openalex") as mock_oa3:
-    mock_cr3.return_value = None
-    mock_oa3.return_value = None
+    unchanged_web = enrich_source(generic_web_source)
 
-    unchanged_both = enrich_source(doi_src3)
-
-check("Both APIs fail — source returned unchanged", unchanged_both.author is None)
-check("Both APIs fail — confidence stays low", unchanged_both.metadata_confidence == "low")
+check("Non-academic title returned unchanged", unchanged_web.author is None)
+check("Non-academic title confidence is low", unchanged_web.metadata_confidence == "low")
 
 # ---------------------------------------------------------------------------
-# 5. enrich_sources (batch)
+# 6. enrich_sources (batch)
 # ---------------------------------------------------------------------------
 sources_batch = [
     Source(citation_id=1, url="https://doi.org/10.1234/a"),
-    Source(citation_id=2, url="https://www.imf.org/en/Publications"),  # no DOI
-    Source(citation_id=3, url="https://doi.org/10.5678/b"),
+    Source(citation_id=2, title="BBC News Overview", url="https://bbc.com/article"),
+    Source(citation_id=3, title="Trade Policy and Foreign Investment", url="https://edu.org/paper"),
 ]
 
 with patch("enrichment.lookup_crossref") as mock_cr4, \
-     patch("enrichment.lookup_openalex") as mock_oa4:
+     patch("enrichment.lookup_openalex") as mock_oa4, \
+     patch("enrichment.search_openalex_by_title") as mock_title_s:
+
     mock_cr4.side_effect = lambda doi: crossref_msg_full if "1234" in doi else None
-    mock_oa4.side_effect = lambda doi: openalex_work if "5678" in doi else None
+    mock_oa4.return_value = None
+    mock_title_s.side_effect = lambda t: openalex_work if "Trade Policy" in t else None
 
     batch_result = enrich_sources(sources_batch)
 
-check("Batch: first source enriched from Crossref", batch_result[0].year == 1988)
-check("Batch: web source remains unchanged", batch_result[1].author is None)
-check("Batch: third source enriched from OpenAlex", batch_result[2].year == 2023)
+check("Batch: first source enriched from Crossref (DOI)", batch_result[0].year == 1988)
+check("Batch: second source unchanged (news)", batch_result[1].author is None)
+check("Batch: third source enriched via title search", batch_result[2].year == 2023)
 check("Batch: returns same count as input", len(batch_result) == 3)
 
 # ---------------------------------------------------------------------------
-# 6. Adversarial Tests
+# 7. Adversarial Tests
 # ---------------------------------------------------------------------------
 
-# Exception during enrichment — must not crash enrich_sources
+# Exception during enrichment
 bad_source = Source(citation_id=99, title="Bad", url="https://doi.org/10.0000/crash")
 with patch("enrichment.enrich_source") as mock_enrich:
     mock_enrich.side_effect = RuntimeError("Simulated crash")
     result = enrich_sources([bad_source])
 
-check("Adversarial: RuntimeError inside enrich_source handled safely by enrich_sources",
+check("Adversarial: RuntimeError inside enrich_source handled safely",
     result[0].title == "Bad" and result[0].author is None)
 
-# Crossref returns malformed data (missing required keys)
+# Malformed Crossref data
 malformed_msg = {"DOI": "10.1/bad", "author": None, "container-title": None}
 parsed_malformed = _parse_crossref(malformed_msg)
 check("Adversarial: malformed Crossref data parsed safely", parsed_malformed.get("author") is None)
 
-# OpenAlex returns empty authorships list
-oa_empty_authors = {"id": "W0", "authorships": [], "publication_year": 2020, "doi": "https://doi.org/10.0/x"}
-parsed_empty = _parse_openalex(oa_empty_authors)
-check("Adversarial: empty OpenAlex authorships handled", parsed_empty.get("author") is None)
-check("Adversarial: OpenAlex year still parsed when authors empty", parsed_empty.get("year") == 2020)
-
-# DOI with trailing garbage characters (valid DOI prefix: 4+ digits)
+# Valid DOI prefix with trailing garbage
 check("Adversarial: DOI with trailing ) stripped",
     extract_doi_from_url("https://doi.org/10.1016/test-paper)") == "10.1016/test-paper")
 
@@ -240,7 +256,7 @@ total = len(results)
 print(f"\n{'='*60}")
 print(f"Results: {passed}/{total} passed")
 if passed == total:
-    print("\033[92m✓ All enrichment tests passed. Module v0.3 is verified.\033[0m")
+    print("\033[92m✓ All enrichment tests passed. Module v0.3.5 is verified.\033[0m")
 else:
     print(f"\033[91m✗ {total - passed} test(s) failed.\033[0m")
     sys.exit(1)

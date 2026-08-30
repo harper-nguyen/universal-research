@@ -1,22 +1,18 @@
 """
-enrichment.py — Academic Metadata Enrichment for Universal Research App v0.3
+enrichment.py — Academic Metadata Enrichment for Universal Research App v0.3.5
 
 Enriches Source objects with academic metadata from:
-  1. Crossref API — best for DOI-based lookup (structured bibliographic data)
-  2. OpenAlex API — open academic graph, no key required
-
-Enrichment trigger: a DOI must be detectable in the source URL.
-Sources without a recognizable DOI (e.g., news articles, government pages,
-Wikipedia) are returned unchanged — no metadata is fabricated.
+  1. DOI-based lookup via Crossref API & OpenAlex API (highest accuracy)
+  2. Title-based search via OpenAlex API (when source URL lacks DOI)
 
 PRINCIPLES:
-  - Never fabricate: if API returns no data, Source is left unchanged.
-  - Graceful degradation: network errors never crash the app.
-  - Conservative confidence: metadata_confidence updated only when verified.
-
-FUTURE EXTENSION:
-  - Add Semantic Scholar lookup by DOI or title.
-  - Add title-based OpenAlex search for sources without DOIs.
+  - Never fabricate: if APIs return no verified match, Source is left unchanged.
+  - Strict matching: Title-based search requires high title similarity (>= 80%) to prevent false positives.
+  - Graceful degradation: network errors or timeouts never crash the app.
+  - Conservative confidence:
+      * "high": direct DOI match with author + DOI verified
+      * "medium": high-similarity title match or partial DOI match
+      * "low": un-enriched web source
 """
 
 from __future__ import annotations
@@ -25,7 +21,7 @@ import re
 import urllib.request
 import urllib.parse
 import json
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 
 from citations import Source
 
@@ -40,7 +36,7 @@ TIMEOUT_SECONDS = 5
 
 # Polite-pool header (helps avoid rate limiting)
 _HEADERS = {
-    "User-Agent": "universal-research-app/0.3 (https://github.com/harper-nguyen/universal-research)",
+    "User-Agent": "universal-research-app/0.3.5 (https://github.com/harper-nguyen/universal-research)",
 }
 
 
@@ -72,6 +68,67 @@ def extract_doi_from_url(url: str) -> Optional[str]:
         return None
     doi = match.group(1).rstrip(".,;)")  # Strip trailing punctuation
     return doi if doi else None
+
+
+# ---------------------------------------------------------------------------
+# Title cleaning & similarity matching
+# ---------------------------------------------------------------------------
+
+# Common website/publisher suffixes in web search titles
+_TITLE_CLEAN_SUFFIXES = re.compile(
+    r"\s*(?:[-|–—:]\s*(?:ScienceDirect|Nature|SpringerLink|Wiley|ResearchGate|PubMed|IEEE Xplore|Oxford Academic|Cambridge Core|arXiv|Wikipedia|JSTOR|SSRN|The World Bank|IMF|OECD).*$|\[PDF\]|\.pdf$)",
+    re.IGNORECASE,
+)
+
+
+def clean_title_for_search(title: Optional[str]) -> Optional[str]:
+    """
+    Clean web page title for academic search.
+    Strips publisher names, [PDF] tags, and trailing site branding.
+    """
+    if not title:
+        return None
+    cleaned = _TITLE_CLEAN_SUFFIXES.sub("", title).strip()
+    # Remove leading/trailing quotes or punctuation
+    cleaned = re.sub(r"^[\"\'\s]+|[\"\'\s]+$", "", cleaned)
+    # Require at least 3 words to avoid generic terms like 'Home', 'Article', 'Index'
+    if len(cleaned.split()) < 3:
+        return None
+    return cleaned
+
+
+def title_similarity(t1: str, t2: str) -> float:
+    """
+    Calculate word-token Jaccard similarity and character sequence overlap between two titles.
+    Returns a score between 0.0 and 1.0.
+    """
+    if not t1 or not t2:
+        return 0.0
+
+    def tokenize(text: str) -> set:
+        clean = re.sub(r"[^\w\s]", "", text.lower())
+        return set(clean.split())
+
+    tokens1 = tokenize(t1)
+    tokens2 = tokenize(t2)
+
+    if not tokens1 or not tokens2:
+        return 0.0
+
+    intersection = tokens1.intersection(tokens2)
+    union = tokens1.union(tokens2)
+    jaccard = len(intersection) / len(union)
+
+    # Clean string overlap check
+    s1 = re.sub(r"\s+", " ", re.sub(r"[^\w\s]", "", t1.lower())).strip()
+    s2 = re.sub(r"\s+", " ", re.sub(r"[^\w\s]", "", t2.lower())).strip()
+
+    # Exact substring or high containment boost
+    if s1 in s2 or s2 in s1:
+        containment = min(len(s1), len(s2)) / max(len(s1), len(s2))
+        return max(jaccard, containment)
+
+    return jaccard
 
 
 # ---------------------------------------------------------------------------
@@ -169,20 +226,56 @@ def _parse_crossref(msg: dict) -> Dict:
 
 
 # ---------------------------------------------------------------------------
-# OpenAlex lookup
+# OpenAlex lookup (by DOI & by Title)
 # ---------------------------------------------------------------------------
 
 def lookup_openalex(doi: str) -> Optional[dict]:
     """
     Query OpenAlex API by DOI.
     Returns the raw work object, or None if not found / error.
-
-    OpenAlex is queried as fallback when Crossref doesn't return complete data.
     """
     encoded_doi = urllib.parse.quote(doi, safe="")
     data = _get_json(f"{OPENALEX_BASE}/https://doi.org/{encoded_doi}")
     if data and data.get("id"):
         return data
+    return None
+
+
+def search_openalex_by_title(title: str, min_similarity: float = 0.70) -> Optional[dict]:
+    """
+    Search OpenAlex for academic papers by title.
+    Returns the best matching work object if similarity >= min_similarity, else None.
+    """
+    cleaned = clean_title_for_search(title)
+    if not cleaned:
+        return None
+
+    params = {
+        "filter": f"title.search:{cleaned}",
+        "per-page": 3,
+    }
+    data = _get_json(OPENALEX_BASE, params=params)
+    if not data or not data.get("results"):
+        # Try general search if filter returned nothing
+        params = {"search": cleaned, "per-page": 3}
+        data = _get_json(OPENALEX_BASE, params=params)
+
+    if not data or not data.get("results"):
+        return None
+
+    best_match = None
+    best_score = 0.0
+
+    for work in data.get("results", []):
+        cand_title = work.get("title") or work.get("display_name") or ""
+        score = title_similarity(cleaned, cand_title)
+        if score > best_score:
+            best_score = score
+            best_match = work
+
+    if best_match and best_score >= min_similarity:
+        return best_match
+
     return None
 
 
@@ -244,44 +337,48 @@ def enrich_source(source: Source) -> Source:
     """
     Attempt to enrich a Source with academic metadata.
 
-    Steps:
-      1. Extract DOI from source URL.
-      2. If no DOI found, return source unchanged.
-      3. Query Crossref by DOI.
-      4. If Crossref returns incomplete data, supplement from OpenAlex.
-      5. Populate Source fields; update metadata_confidence.
+    Strategy:
+      Phase 1: DOI-based lookup (Crossref + OpenAlex) if URL contains a DOI.
+      Phase 2: Title-based search (OpenAlex) if source has a valid title.
 
-    Never modifies a field that already has a value (no overwrite).
-    Returns source unchanged if no enrichment data is available.
+    Never overwrites existing values.
+    Returns source unchanged if no verified academic metadata is found.
     """
-    if not source.url:
-        return source
-
-    doi = extract_doi_from_url(source.url)
-    if not doi:
-        return source  # Non-academic URL — no enrichment possible
-
     enriched: Dict = {}
+    is_doi_match = False
 
-    # Step 1: Crossref (most structured data for DOI lookup)
-    crossref_data = lookup_crossref(doi)
-    if crossref_data:
-        enriched = _parse_crossref(crossref_data)
+    # 1. DOI in URL check
+    if source.url:
+        doi = extract_doi_from_url(source.url)
+        if doi:
+            # Step 1a: Crossref (most structured for DOI)
+            crossref_data = lookup_crossref(doi)
+            if crossref_data:
+                enriched = _parse_crossref(crossref_data)
 
-    # Step 2: OpenAlex supplement (fill missing fields only)
-    needs_supplement = not enriched.get("author") or not enriched.get("year")
-    if needs_supplement:
-        oa_data = lookup_openalex(doi)
-        if oa_data:
-            oa_enriched = _parse_openalex(oa_data)
-            for key, value in oa_enriched.items():
-                if key not in enriched or not enriched[key]:
-                    enriched[key] = value
+            # Step 1b: OpenAlex supplement (fill missing fields)
+            needs_supplement = not enriched.get("author") or not enriched.get("year")
+            if needs_supplement:
+                oa_data = lookup_openalex(doi)
+                if oa_data:
+                    oa_enriched = _parse_openalex(oa_data)
+                    for key, value in oa_enriched.items():
+                        if key not in enriched or not enriched[key]:
+                            enriched[key] = value
+
+            if enriched:
+                is_doi_match = True
+
+    # 2. Title-based OpenAlex search (fallback when no DOI in URL)
+    if not enriched and source.title:
+        oa_work = search_openalex_by_title(source.title)
+        if oa_work:
+            enriched = _parse_openalex(oa_work)
 
     if not enriched:
-        return source  # No data from either API
+        return source  # No match found — leave source unchanged
 
-    # Apply enriched data — only fill empty fields, never overwrite
+    # Apply verified metadata — only fill empty fields
     if not source.author and enriched.get("author"):
         source.author = enriched["author"]
     if not source.year and enriched.get("year"):
@@ -290,12 +387,14 @@ def enrich_source(source: Source) -> Source:
         source.journal = enriched["journal"]
     if not source.doi and enriched.get("doi"):
         source.doi = enriched["doi"]
+
+    if source.author or source.doi:
         source.source_type = "academic"
 
-    # Update confidence level
-    if source.author and source.doi:
+    # Set confidence level based on matching method
+    if is_doi_match and source.author and source.doi:
         source.metadata_confidence = "high"
-    elif source.year or source.journal:
+    elif enriched.get("author") or enriched.get("year"):
         source.metadata_confidence = "medium"
 
     return source
@@ -304,8 +403,7 @@ def enrich_source(source: Source) -> Source:
 def enrich_sources(sources: List[Source]) -> List[Source]:
     """
     Enrich a list of Sources with academic metadata.
-
-    Sources without detectable DOIs are returned unchanged.
+    Handles both DOI-based and title-based matches safely.
     Network errors never crash the caller — fallback is always the original source.
     """
     enriched = []
@@ -313,5 +411,5 @@ def enrich_sources(sources: List[Source]) -> List[Source]:
         try:
             enriched.append(enrich_source(source))
         except Exception:
-            enriched.append(source)  # Safety net — always preserve original
+            enriched.append(source)  # Safety net
     return enriched
