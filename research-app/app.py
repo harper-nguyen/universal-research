@@ -223,10 +223,36 @@ def main():
     # Initialize session history
     if "history" not in st.session_state:
         st.session_state["history"] = []
-    if "active_report" not in st.session_state:
-        st.session_state["active_report"] = None
+    # Initialize research mode state
+    if "selected_mode" not in st.session_state:
+        st.session_state["selected_mode"] = "🌐 Tiêu chuẩn"
+
+    mode_options = [
+        "🌐 Tiêu chuẩn",
+        "🎓 Học thuật chuyên sâu",
+        "⚡ Tóm tắt điều hành",
+    ]
+
+    def _on_sidebar_mode_change():
+        st.session_state["selected_mode"] = st.session_state["mode_sidebar"]
+
+    def _on_main_mode_change():
+        st.session_state["selected_mode"] = st.session_state["mode_main"]
+
+    current_idx = mode_options.index(st.session_state["selected_mode"]) if st.session_state["selected_mode"] in mode_options else 0
 
     with st.sidebar:
+        st.markdown("### Cài đặt nghiên cứu")
+        st.radio(
+            "Chế độ phân tích",
+            mode_options,
+            index=current_idx,
+            key="mode_sidebar",
+            on_change=_on_sidebar_mode_change,
+            help="Chọn mức độ chi tiết và định hướng trọng tâm của báo cáo",
+        )
+        st.markdown("---")
+
         st.markdown("### 📜 Lịch sử phiên")
         if st.session_state["history"]:
             for idx, item in enumerate(reversed(st.session_state["history"])):
@@ -247,12 +273,10 @@ def main():
 
     mode = st.radio(
         "Chế độ phân tích",
-        [
-            "🌐 Tiêu chuẩn",
-            "🎓 Học thuật chuyên sâu",
-            "⚡ Tóm tắt điều hành",
-        ],
-        index=0,
+        mode_options,
+        index=current_idx,
+        key="mode_main",
+        on_change=_on_main_mode_change,
         horizontal=True,
         help="Chọn mức độ chi tiết và định hướng trọng tâm của báo cáo",
     )
