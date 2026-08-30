@@ -59,6 +59,8 @@ class Source:
     year: Optional[int] = None
     journal: Optional[str] = None
     doi: Optional[str] = None
+    citation_count: Optional[int] = None
+    is_highly_cited: bool = False
 
     def __post_init__(self) -> None:
         # Normalize empty strings to None
@@ -69,6 +71,7 @@ class Source:
         # Derive domain from URL when not explicitly provided
         if self.url and self.domain is None:
             self.domain = _extract_domain(self.url)
+
 
 
 # ---------------------------------------------------------------------------
@@ -170,72 +173,164 @@ def build_source_list(
 
 
 # ---------------------------------------------------------------------------
-# APA 7 formatting
+# Citation Formatters (APA 7, IEEE, Harvard, MLA 9, BibTeX)
 # ---------------------------------------------------------------------------
 
 def format_apa7(source: Source) -> str:
-    """
-    Format a Source as APA 7 using ONLY available metadata.
-
-    NEVER fabricates author, year, journal, or DOI.
-
-    APA 7 patterns applied in order of completeness:
-      Full (future):   Author, A. (Year). Title. Journal. https://doi.org/DOI
-      v0.2 with URL:   Title. domain.com. url
-      v0.2 no URL:     Title.
-      URL only:        url
-      Neither:         [Source metadata unavailable]
-    """
+    """Format a Source as APA 7 using ONLY available metadata."""
     parts: List[str] = []
-
-    # Author (not available in v0.2)
     if source.author:
         parts.append(f"{source.author}.")
-
-    # Year (not available in v0.2)
     if source.year:
         parts.append(f"({source.year}).")
-
-    # Title
     if source.title:
         parts.append(f"{source.title}.")
-
-    # Journal (not available in v0.2)
     if source.journal:
         parts.append(f"*{source.journal}*.")
-
-    # Publisher stand-in from domain (low confidence — informational only)
     if source.domain and not source.journal and not source.author:
         parts.append(f"{source.domain}.")
-
-    # DOI or URL
     if source.doi:
         parts.append(f"https://doi.org/{source.doi}")
     elif source.url:
         parts.append(source.url)
-
     if not parts:
         return "[Source metadata unavailable]"
-
     return " ".join(parts)
+
+
+def format_ieee(source: Source) -> str:
+    """Format a Source in IEEE style."""
+    parts: List[str] = []
+    if source.author:
+        parts.append(f"{source.author},")
+    if source.title:
+        parts.append(f'"{source.title},"')
+    if source.journal:
+        parts.append(f"*{source.journal}*,")
+    elif source.domain:
+        parts.append(f"{source.domain},")
+    if source.year:
+        parts.append(f"{source.year}.")
+    if source.doi:
+        parts.append(f"doi: {source.doi}.")
+    elif source.url:
+        parts.append(f"[Online]. Available: {source.url}")
+    if not parts:
+        return "[Source metadata unavailable]"
+    return " ".join(parts)
+
+
+def format_harvard(source: Source) -> str:
+    """Format a Source in Harvard style."""
+    parts: List[str] = []
+    if source.author:
+        parts.append(source.author)
+    if source.year:
+        parts.append(f"({source.year})")
+    if source.title:
+        parts.append(f"'{source.title}',")
+    if source.journal:
+        parts.append(f"*{source.journal}*.")
+    elif source.domain:
+        parts.append(f"{source.domain}.")
+    if source.doi:
+        parts.append(f"Available at: https://doi.org/{source.doi}")
+    elif source.url:
+        parts.append(f"Available at: {source.url}")
+    if not parts:
+        return "[Source metadata unavailable]"
+    return " ".join(parts)
+
+
+def format_mla9(source: Source) -> str:
+    """Format a Source in MLA 9th Edition style."""
+    parts: List[str] = []
+    if source.author:
+        parts.append(f"{source.author}.")
+    if source.title:
+        parts.append(f'"{source.title}."')
+    if source.journal:
+        parts.append(f"*{source.journal}*,")
+    elif source.domain:
+        parts.append(f"*{source.domain}*,")
+    if source.year:
+        parts.append(f"{source.year},")
+    if source.doi:
+        parts.append(f"https://doi.org/{source.doi}.")
+    elif source.url:
+        parts.append(f"{source.url}.")
+    if not parts:
+        return "[Source metadata unavailable]"
+    return " ".join(parts)
+
+
+def format_bibtex_entry(source: Source) -> str:
+    """Generate a single BibTeX entry (@article or @misc)."""
+    entry_type = "article" if (source.journal or source.doi) else "misc"
+    cite_key = f"ref_{source.citation_id}"
+    
+    fields = []
+    if source.title:
+        clean_title = source.title.replace("{", "").replace("}", "")
+        fields.append(f'  title = {{{clean_title}}}')
+    if source.author:
+        # Convert to BibTeX 'and' separated format if multiple
+        authors_bib = source.author.replace("&", "and").replace(",", " and")
+        fields.append(f'  author = {{{source.author}}}')
+    if source.year:
+        fields.append(f'  year = {{{source.year}}}')
+    if source.journal:
+        fields.append(f'  journal = {{{source.journal}}}')
+    if source.doi:
+        fields.append(f'  doi = {{{source.doi}}}')
+    if source.url:
+        fields.append(f'  url = {{{source.url}}}')
+    elif source.domain:
+        fields.append(f'  howpublished = {{{source.domain}}}')
+
+    fields_str = ",\n".join(fields)
+    return f"@{entry_type}{{{cite_key},\n{fields_str}\n}}"
+
+
+def build_bibtex_file(sources: List[Source]) -> str:
+    """Generate the complete .bib file content for all sources."""
+    if not sources:
+        return "% No references found"
+    entries = [format_bibtex_entry(s) for s in sorted(sources, key=lambda x: x.citation_id)]
+    return "\n\n".join(entries)
+
+
+def format_citation(source: Source, style: str = "APA 7") -> str:
+    """Format a Source according to the requested citation style."""
+    style_upper = (style or "APA 7").upper().strip()
+    if "IEEE" in style_upper:
+        return format_ieee(source)
+    elif "HARVARD" in style_upper:
+        return format_harvard(source)
+    elif "MLA" in style_upper:
+        return format_mla9(source)
+    elif "BIBTEX" in style_upper:
+        return format_bibtex_entry(source)
+    return format_apa7(source)
 
 
 # ---------------------------------------------------------------------------
 # References section
 # ---------------------------------------------------------------------------
 
-def build_references_markdown(sources: List[Source]) -> str:
+def build_references_markdown(sources: List[Source], style: str = "APA 7") -> str:
     """
-    Build a Markdown ## References section from a list of Sources.
+    Build a Markdown ## References section from a list of Sources in the selected style.
     Sources are sorted by citation_id. Returns empty string if sources is empty.
-    Only sources passed in this list are included.
     """
     if not sources:
         return ""
-    lines = ["## References", ""]
+    lines = [f"## References ({style})", ""]
     for src in sorted(sources, key=lambda s: s.citation_id):
-        lines.append(f"[{src.citation_id}] {format_apa7(src)}")
+        formatted = format_citation(src, style=style)
+        lines.append(f"[{src.citation_id}] {formatted}")
     return "\n".join(lines)
+
 
 
 # ---------------------------------------------------------------------------

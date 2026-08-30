@@ -32,11 +32,12 @@ from citations import Source
 
 CROSSREF_BASE = "https://api.crossref.org/works"
 OPENALEX_BASE = "https://api.openalex.org/works"
+SEMANTICSCHOLAR_BASE = "https://api.semanticscholar.org/graph/v1/paper"
 TIMEOUT_SECONDS = 5
 
 # Polite-pool header (helps avoid rate limiting)
 _HEADERS = {
-    "User-Agent": "universal-research-app/0.3.5 (https://github.com/harper-nguyen/universal-research)",
+    "User-Agent": "universal-research-app/0.5 (https://github.com/harper-nguyen/universal-research)",
 }
 
 
@@ -329,6 +330,16 @@ def _parse_openalex(work: dict) -> Dict:
     return result
 
 
+def lookup_semanticscholar(doi: str) -> Optional[dict]:
+    """
+    Query Semantic Scholar Graph API by DOI for citation metrics.
+    Returns paper metadata dict with citationCount, or None on error.
+    """
+    encoded_doi = urllib.parse.quote(doi, safe="")
+    url = f"{SEMANTICSCHOLAR_BASE}/DOI:{encoded_doi}?fields=citationCount,influentialCitationCount"
+    return _get_json(url)
+
+
 # ---------------------------------------------------------------------------
 # Enrichment orchestration
 # ---------------------------------------------------------------------------
@@ -340,6 +351,7 @@ def enrich_source(source: Source) -> Source:
     Strategy:
       Phase 1: DOI-based lookup (Crossref + OpenAlex) if URL contains a DOI.
       Phase 2: Title-based search (OpenAlex) if source has a valid title.
+      Phase 3: Semantic Scholar citation metric lookup if DOI is known.
 
     Never overwrites existing values.
     Returns source unchanged if no verified academic metadata is found.
@@ -397,6 +409,18 @@ def enrich_source(source: Source) -> Source:
     elif enriched.get("author") or enriched.get("year"):
         source.metadata_confidence = "medium"
 
+    # Phase 3: Semantic Scholar citation count enrichment
+    if source.doi and source.citation_count is None:
+        try:
+            s2_data = lookup_semanticscholar(source.doi)
+            if s2_data and isinstance(s2_data.get("citationCount"), int):
+                count = s2_data["citationCount"]
+                source.citation_count = count
+                if count >= 50:
+                    source.is_highly_cited = True
+        except Exception:
+            pass
+
     return source
 
 
@@ -413,3 +437,4 @@ def enrich_sources(sources: List[Source]) -> List[Source]:
         except Exception:
             enriched.append(source)  # Safety net
     return enriched
+
