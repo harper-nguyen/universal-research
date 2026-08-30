@@ -4,6 +4,10 @@ import streamlit as st
 from google import genai
 from google.genai import types
 
+import citations
+from citations import Source
+import enrichment
+
 st.set_page_config(page_title="Universal Research", layout="wide")
 
 st.markdown("""
@@ -43,14 +47,6 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
-
-# Models to try in priority order (most capable first)
-CANDIDATE_MODELS = [
-    "gemini-3.6-flash",
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-    "gemini-2.0-flash",
-]
 
 def get_api_key():
     try:
@@ -93,7 +89,10 @@ MODELS_NO_SEARCH = [
 ]
 
 def run_research(client, skill_content, prompt, use_search=True):
-    """Try candidate models in order. Returns (response_text, model_used, sources)."""
+    """
+    Try candidate models in order.
+    Returns (response_text, model_used, sources, references_markdown, citations_inserted).
+    """
     model_list = MODELS_WITH_SEARCH if use_search else MODELS_NO_SEARCH
     tools = [{"google_search": {}}] if use_search else []
     errors = []
@@ -109,16 +108,29 @@ def run_research(client, skill_content, prompt, use_search=True):
                     temperature=0.2,
                 ),
             )
-            # Extract sources
-            sources = []
+            
+            raw_chunks = None
+            raw_supports = None
             try:
-                chunks = response.candidates[0].grounding_metadata.grounding_chunks
-                for chunk in (chunks or []):
-                    if hasattr(chunk, "web") and chunk.web:
-                        sources.append({"title": chunk.web.title, "uri": chunk.web.uri})
+                meta = response.candidates[0].grounding_metadata
+                raw_chunks = getattr(meta, "grounding_chunks", None)
+                raw_supports = getattr(meta, "grounding_supports", None)
             except Exception:
                 pass
-            return response.text, model, sources
+
+            sources, chunk_map = citations.build_source_list(raw_chunks)
+
+            # v0.3: Enrich sources with academic metadata (Crossref / OpenAlex)
+            # Sources without detectable DOIs are returned unchanged.
+            sources = enrichment.enrich_sources(sources)
+
+            annotated_text, inserted = citations.annotate_text_with_citations(
+                response.text, raw_supports, chunk_map
+            )
+            ref_markdown = citations.build_references_markdown(sources)
+
+            return annotated_text, model, sources, ref_markdown, inserted
+
         except Exception as e:
             errors.append(f"{model}: {e}")
             continue  # Always try next model regardless of error type
@@ -133,23 +145,26 @@ def run_research(client, skill_content, prompt, use_search=True):
         "Details:\n" + "\n".join(errors)
     )
 
-def build_markdown_report(question, result_text, model_used, sources):
+def build_markdown_report(question, result_text, model_used, sources, ref_markdown):
     lines = [
-        f"# Research Report\n",
+        "# Research Report\n",
         f"**Question:** {question}\n",
         f"**Model:** `{model_used}`\n",
         "---\n",
         result_text,
     ]
-    if sources:
+    if ref_markdown and "## References" not in result_text:
+        lines.extend(["\n", ref_markdown])
+    elif sources and "## References" not in result_text:
         lines.append("\n---\n## Sources Referenced\n")
         for s in sources:
-            lines.append(f"- [{s['title']}]({s['uri']})")
+            apa = citations.format_apa7(s)
+            lines.append(f"[{s.citation_id}] {apa}")
     return "\n".join(lines)
 
 def main():
     st.markdown("<h1>Universal Research</h1>", unsafe_allow_html=True)
-    st.markdown('<div class="subtitle">Evidence-based analysis · Universal Research Skill v0.1.1</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtitle">Evidence-based analysis · Universal Research Skill v0.3 — Academic Metadata Enrichment</div>', unsafe_allow_html=True)
 
     api_key = get_api_key()
     if not api_key:
@@ -166,8 +181,11 @@ def main():
         st.markdown("### Settings")
         depth = st.radio("Analysis Depth", ["Quick Summary", "Standard", "Deep Dive"], index=1)
         st.markdown("---")
+        st.markdown("### Citation Settings")
+        citation_style = st.selectbox("Citation Style", ["APA 7"], index=0)
+        st.markdown("---")
         st.markdown("<small>Skill: <code>universal-research v0.1.1</code></small>", unsafe_allow_html=True)
-        st.markdown("<small>Models: auto-selected</small>", unsafe_allow_html=True)
+        st.markdown("<small>Citations: <code>v0.3 — Academic Enrichment</code></small>", unsafe_allow_html=True)
 
     question = st.text_area(
         "",
@@ -200,7 +218,9 @@ def main():
 
         with st.spinner("Analyzing…"):
             try:
-                result_text, model_used, sources = run_research(client, skill_content, full_prompt)
+                result_text, model_used, sources, ref_markdown, inserted = run_research(
+                    client, skill_content, full_prompt
+                )
 
                 st.markdown("---")
                 st.markdown(
@@ -210,16 +230,12 @@ def main():
                 st.markdown("### Report")
                 st.markdown(result_text)
 
-                if sources:
-                    st.markdown("#### Sources referenced")
-                    for s in sources:
-                        st.markdown(
-                            f"<small>· <a href='{s['uri']}' target='_blank' style='color:#666;text-decoration:none'>{s['title']}</a></small>",
-                            unsafe_allow_html=True,
-                        )
+                if ref_markdown and "## References" not in result_text:
+                    st.markdown("---")
+                    st.markdown(ref_markdown)
 
                 # Export button
-                md_report = build_markdown_report(question, result_text, model_used, sources)
+                md_report = build_markdown_report(question, result_text, model_used, sources, ref_markdown)
                 st.download_button(
                     label="Download report (.md)",
                     data=md_report.encode("utf-8"),
@@ -236,3 +252,4 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
     main()
+

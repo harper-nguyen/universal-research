@@ -1,3 +1,10 @@
+# Thư viện Python cần thiết cho Universal Research App v0.3
+
+# Giao diện web
 streamlit
+
+# Gemini AI SDK (Google Generative AI)
 google-genai
+
+# Đọc biến môi trường từ file .env (dùng khi chạy local)
 python-dotenv

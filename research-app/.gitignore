@@ -6,3 +6,7 @@ __pycache__/
 .streamlit/secrets.toml
 # SKILL.md must NOT be copied here — load from canonical ../SKILL.md
 SKILL.md
+
+# Debug / one-off scripts — not for production repo
+test_integration_real_gemini.py
+list_models.py
