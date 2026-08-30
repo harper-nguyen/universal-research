@@ -2,7 +2,7 @@
 
 Công cụ nghiên cứu tự động, dựa trên bằng chứng thực, được vận hành bởi Gemini AI + Google Search.
 
-> **Phiên bản hiện tại:** v0.2 — Citation Engine  
+> **Phiên bản hiện tại:** v0.3 — Academic Metadata Enrichment  
 > **Trạng thái:** Đã kiểm thử & triển khai, sẵn sàng dùng hàng ngày
 
 ---
