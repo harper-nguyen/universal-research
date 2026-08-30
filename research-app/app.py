@@ -227,20 +227,6 @@ def main():
         st.session_state["active_report"] = None
 
     with st.sidebar:
-        st.markdown("### Cài đặt nghiên cứu")
-        mode = st.radio(
-            "Chế độ phân tích",
-            [
-                "🌐 Tiêu chuẩn (Standard)",
-                "🎓 Học thuật chuyên sâu (Deep Academic)",
-                "⚡ Tóm tắt điều hành (Executive Brief)",
-            ],
-            index=0,
-            help="Chọn mức độ chi tiết và định hướng trọng tâm của báo cáo",
-        )
-
-        st.markdown("---")
-        # Session History section
         st.markdown("### 📜 Lịch sử phiên")
         if st.session_state["history"]:
             for idx, item in enumerate(reversed(st.session_state["history"])):
@@ -259,6 +245,17 @@ def main():
         st.markdown("---")
         st.markdown("<small>Universal Research &middot; <code>v0.5</code></small>", unsafe_allow_html=True)
 
+    mode = st.radio(
+        "Chế độ phân tích",
+        [
+            "🌐 Tiêu chuẩn",
+            "🎓 Học thuật chuyên sâu",
+            "⚡ Tóm tắt điều hành",
+        ],
+        index=0,
+        horizontal=True,
+        help="Chọn mức độ chi tiết và định hướng trọng tâm của báo cáo",
+    )
 
     question = st.text_area(
         "",
