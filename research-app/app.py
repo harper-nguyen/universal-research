@@ -226,43 +226,16 @@ def main():
         st.session_state["active_report"] = None
 
     with st.sidebar:
-        st.markdown("### Settings")
-        depth = st.radio("Analysis Depth", ["Quick Summary", "Standard", "Deep Dive"], index=1)
-        
-        mode = st.selectbox(
-            "Research Focus",
+        st.markdown("### Cài đặt nghiên cứu")
+        mode = st.radio(
+            "Chế độ phân tích",
             [
-                "🌐 Toàn diện (Web + Học thuật)",
-                "🎓 Học thuật chuyên sâu (Peer-reviewed)",
-                "⚡ Tóm tắt điều hành (Executive)",
+                "🌐 Tiêu chuẩn (Standard)",
+                "🎓 Học thuật chuyên sâu (Deep Academic)",
+                "⚡ Tóm tắt điều hành (Executive Brief)",
             ],
             index=0,
-        )
-
-        st.markdown("---")
-        st.markdown("### Model Controls")
-        model_choice = st.selectbox(
-            "AI Model",
-            ["Auto (Tự động chuyển đổi)", "gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-pro"],
-            index=0,
-        )
-        selected_model = None if "Auto" in model_choice else model_choice
-
-        temperature = st.slider(
-            "Temperature",
-            min_value=0.0,
-            max_value=0.5,
-            value=0.2,
-            step=0.05,
-            help="0.0: Nghiêm ngặt tuyệt đối, bám sát dữ liệu | 0.5: Tổng hợp mở rộng",
-        )
-
-        st.markdown("---")
-        st.markdown("### Citation Style")
-        citation_style = st.selectbox(
-            "Format",
-            ["APA 7", "IEEE", "Harvard", "MLA 9", "BibTeX"],
-            index=0,
+            help="Chọn mức độ chi tiết và định hướng trọng tâm của báo cáo",
         )
 
         st.markdown("---")
@@ -270,7 +243,7 @@ def main():
         st.markdown("### 📜 Lịch sử phiên")
         if st.session_state["history"]:
             for idx, item in enumerate(reversed(st.session_state["history"])):
-                q_snippet = (item['question'][:30] + "…") if len(item['question']) > 30 else item['question']
+                q_snippet = (item['question'][:28] + "…") if len(item['question']) > 28 else item['question']
                 time_str = item.get("timestamp", "")
                 if st.button(f"📄 {q_snippet}", key=f"hist_{idx}", help=f"{time_str}\n{item['question']}"):
                     st.session_state["active_report"] = item
@@ -285,6 +258,7 @@ def main():
         st.markdown("---")
         st.markdown("<small>Universal Research &middot; <code>v0.5</code></small>", unsafe_allow_html=True)
 
+
     question = st.text_area(
         "",
         placeholder="Enter your research question… (ví dụ: Tác động của chính sách thuế tối thiểu toàn cầu đến FDI tại các nước đang phát triển)",
@@ -298,45 +272,41 @@ def main():
         if not question.strip():
             st.warning("Please enter a research question.")
             return
-
-        depth_prompt = {
-            "Quick Summary": "Provide a concise, well-structured summary.",
-            "Standard": "Perform a standard, balanced research analysis.",
-            "Deep Dive": "Perform a deep, comprehensive analysis with detailed synthesis of evidence, methodology, and limitations.",
-        }.get(depth, "")
-
-        mode_constraint = ""
         if "Học thuật" in mode:
             mode_constraint = (
-                "Academic Focus Requirement: Prioritize peer-reviewed scientific studies, working papers, "
-                "institutional data (IMF, World Bank, OECD, WHO), and empirical datasets. "
-                "Explicitly emphasize methodology, sample sizes, and empirical consensus."
+                "Chế độ: Phân tích học thuật chuyên sâu (Academic Deep Dive).\n"
+                "Yêu cầu: Đào sâu bằng chứng thực nghiệm, phương pháp luận nghiên cứu, ưu tiên các bài báo có bình duyệt (peer-reviewed), "
+                "báo cáo từ các tổ chức uy tín (IMF, World Bank, OECD, WHO) và làm rõ các điểm mâu thuẫn/đồng thuận khoa học."
             )
         elif "Tóm tắt" in mode:
             mode_constraint = (
-                "Executive Focus Requirement: Prioritize actionable insights, core key performance indicators, "
-                "strategic takeaways, and concise bullet points for decision makers."
+                "Chế độ: Tóm tắt điều hành (Executive Summary).\n"
+                "Yêu cầu: Ngắn gọn, súc tích, tập trung vào các phát hiện then chốt, chỉ số định lượng cốt lõi và bài học chiến lược."
+            )
+        else:
+            mode_constraint = (
+                "Chế độ: Nghiên cứu tiêu chuẩn (Standard Research).\n"
+                "Yêu cầu: Khách quan, cân bằng, bao quát toàn diện các khía cạnh của chủ đề kèm dẫn chứng xác minh."
             )
 
         full_prompt = (
-            f"Research Task: {question}\n\n"
-            f"Depth constraint: {depth_prompt}\n"
+            f"Nhiệm vụ nghiên cứu: {question}\n\n"
             f"{mode_constraint}\n\n"
-            "Output your response in Markdown using this structure: "
-            "Executive Summary, Key Findings, Evidence & Sources, "
-            "Contradictory/Uncertain Evidence, Analysis, Conclusion, Limitations. "
-            "Adapt the structure if the question warrants a different format."
+            "Cấu trúc báo cáo bằng Markdown gồm: "
+            "Tóm tắt tổng quan, Các phát hiện chính, Bằng chứng & Nguồn số liệu, "
+            "Dữ liệu mâu thuẫn/Chưa chắc chắn, Phân tích chuyên sâu, Kết luận, Hạn chế của nghiên cứu. "
+            "Có thể điều chỉnh cấu trúc linh hoạt cho phù hợp với nội dung câu hỏi."
         )
 
-        with st.spinner("Analyzing & Verifying Sources…"):
+        with st.spinner("Đang nghiên cứu & xác minh nguồn dữ liệu…"):
             try:
                 result_text, model_used, sources, ref_markdown, inserted = run_research(
                     client=client,
                     skill_content=skill_content,
                     prompt=full_prompt,
-                    preferred_model=selected_model,
-                    temperature=temperature,
-                    citation_style=citation_style,
+                    preferred_model=None,
+                    temperature=0.2,
+                    citation_style="APA 7",
                 )
 
                 # Save to history
@@ -346,7 +316,7 @@ def main():
                     "model_used": model_used,
                     "sources": sources,
                     "ref_markdown": ref_markdown,
-                    "citation_style": citation_style,
+                    "citation_style": "APA 7",
                     "timestamp": datetime.now().strftime("%H:%M:%S"),
                     "followups": [],
                 }
@@ -381,7 +351,7 @@ def main():
         with mcol3:
             st.markdown(f"<div class='metric-card'><div class='metric-title'>Đã xác minh DOI/Title</div><div class='metric-val'>{high_conf_count}</div></div>", unsafe_allow_html=True)
         with mcol4:
-            st.markdown(f"<div class='metric-card'><div class='metric-title'>Chuẩn trích dẫn</div><div class='metric-val'>{active.get('citation_style', citation_style)}</div></div>", unsafe_allow_html=True)
+            st.markdown("<div class='metric-card'><div class='metric-title'>Chuẩn trích dẫn</div><div class='metric-val'>APA 7</div></div>", unsafe_allow_html=True)
 
         tab_report, tab_sources, tab_markdown = st.tabs([
             "📄 Báo cáo (Report)",
