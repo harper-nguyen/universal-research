@@ -383,7 +383,11 @@ def main():
         with mcol4:
             st.markdown(f"<div class='metric-card'><div class='metric-title'>Chuẩn trích dẫn</div><div class='metric-val'>{active.get('citation_style', citation_style)}</div></div>", unsafe_allow_html=True)
 
-        tab_report, tab_sources = st.tabs(["📄 Báo cáo (Report)", "🔍 Nguồn & Bằng chứng (Evidence Audit)"])
+        tab_report, tab_sources, tab_markdown = st.tabs([
+            "📄 Báo cáo (Report)",
+            "🔍 Nguồn & Bằng chứng (Evidence Audit)",
+            "📋 Mã Markdown (Xem & Copy)",
+        ])
 
         with tab_report:
             st.markdown(active["result_text"])
@@ -427,6 +431,18 @@ def main():
                             st.markdown(f"- **Domain:** `{s.domain}`")
             else:
                 st.info("Không có nguồn trích dẫn trực tiếp nào được liên kết.")
+
+        with tab_markdown:
+            st.markdown("##### 📋 Mã nguồn Markdown đầy đủ (Nhấn biểu tượng Copy góc trên bên phải khung):")
+            raw_md = build_markdown_report(
+                active["question"],
+                active["result_text"],
+                active["model_used"],
+                active.get("sources", []),
+                active.get("ref_markdown", ""),
+            )
+            st.code(raw_md, language="markdown")
+
 
         # Interactive Follow-up Research Section
         st.markdown("---")
