@@ -342,26 +342,20 @@ def main():
         )
         st.markdown(f"**Question:** *{active['question']}*")
 
-        # Key Metrics Fact Box
         sources_list = active.get("sources", [])
-        acad_count = sum(1 for s in sources_list if s.source_type == "academic" or s.doi or s.author)
-        high_conf_count = sum(1 for s in sources_list if s.metadata_confidence in ("high", "medium"))
-        
-        mcol1, mcol2, mcol3, mcol4 = st.columns(4)
-        with mcol1:
-            st.markdown(f"<div class='metric-card'><div class='metric-title'>Tổng số nguồn</div><div class='metric-val'>{len(sources_list)}</div></div>", unsafe_allow_html=True)
-        with mcol2:
-            st.markdown(f"<div class='metric-card'><div class='metric-title'>Nguồn học thuật</div><div class='metric-val'>{acad_count}</div></div>", unsafe_allow_html=True)
-        with mcol3:
-            st.markdown(f"<div class='metric-card'><div class='metric-title'>Đã xác minh DOI/Title</div><div class='metric-val'>{high_conf_count}</div></div>", unsafe_allow_html=True)
-        with mcol4:
-            st.markdown("<div class='metric-card'><div class='metric-title'>Chuẩn trích dẫn</div><div class='metric-val'>APA 7</div></div>", unsafe_allow_html=True)
 
-        tab_report, tab_sources, tab_markdown = st.tabs([
-            "📄 Báo cáo (Report)",
-            "🔍 Nguồn & Bằng chứng (Evidence Audit)",
-            "📋 Mã Markdown (Xem & Copy)",
-        ])
+        if sources_list:
+            tab_report, tab_sources, tab_markdown = st.tabs([
+                "📄 Báo cáo (Report)",
+                "🔍 Nguồn & Bằng chứng (Evidence Audit)",
+                "📋 Mã Markdown (Xem & Copy)",
+            ])
+        else:
+            tab_report, tab_markdown = st.tabs([
+                "📄 Báo cáo (Report)",
+                "📋 Mã Markdown (Xem & Copy)",
+            ])
+            tab_sources = None
 
         with tab_report:
             st.markdown(active["result_text"])
@@ -376,8 +370,8 @@ def main():
                 st.markdown("---")
                 st.markdown(active["ref_markdown"])
 
-        with tab_sources:
-            if sources_list:
+        if tab_sources and sources_list:
+            with tab_sources:
                 st.markdown(f"**Danh sách tài liệu xác minh ({len(sources_list)} nguồn):**")
                 for s in sorted(sources_list, key=lambda x: x.citation_id):
                     conf_color = {
@@ -403,8 +397,6 @@ def main():
                             st.markdown(f"- **URL:** [{s.url}]({s.url})")
                         if s.domain:
                             st.markdown(f"- **Domain:** `{s.domain}`")
-            else:
-                st.info("Không có nguồn trích dẫn trực tiếp nào được liên kết.")
 
         with tab_markdown:
             st.markdown("##### 📋 Mã nguồn Markdown đầy đủ (Nhấn biểu tượng Copy góc trên bên phải khung):")
@@ -416,6 +408,7 @@ def main():
                 active.get("ref_markdown", ""),
             )
             st.code(raw_md, language="markdown")
+
 
 
         # Interactive Follow-up Research Section
