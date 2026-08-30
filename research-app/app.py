@@ -92,20 +92,21 @@ def get_skill_content():
         st.error(f"Could not load SKILL.md: {e}")
         return None
 
-# Models to try WITH Google Search (requires v1beta, newer models only)
+# Models to try WITH Google Search
 MODELS_WITH_SEARCH = [
-    "gemini-3.6-flash",
     "gemini-2.5-flash",
+    "gemini-2.0-flash",
     "gemini-2.5-pro",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
 ]
 
 # Models to try WITHOUT search (broader compatibility)
 MODELS_NO_SEARCH = [
-    "gemini-3.6-flash",
     "gemini-2.5-flash",
+    "gemini-2.0-flash",
     "gemini-1.5-pro",
     "gemini-1.5-flash",
-    "gemini-1.0-pro",
 ]
 
 def run_research(
@@ -274,9 +275,12 @@ def main():
             return
         if "Học thuật" in mode:
             mode_constraint = (
-                "Chế độ: Phân tích học thuật chuyên sâu (Academic Deep Dive).\n"
-                "Yêu cầu: Đào sâu bằng chứng thực nghiệm, phương pháp luận nghiên cứu, ưu tiên các bài báo có bình duyệt (peer-reviewed), "
-                "báo cáo từ các tổ chức uy tín (IMF, World Bank, OECD, WHO) và làm rõ các điểm mâu thuẫn/đồng thuận khoa học."
+                "CHẾ ĐỘ: PHÂN TÍCH HỌC THUẬT CHUYÊN SÂU (ACADEMIC DEEP DIVE).\n"
+                "YÊU CẦU NGHIÊN CỨU & TRÍCH DẪN:\n"
+                "1. Chủ động tìm kiếm và trích dẫn trực tiếp các bài báo khoa học đã xuất bản, nghiên cứu có bình duyệt (peer-reviewed), "
+                "bài báo từ Google Scholar, Nature, ScienceDirect, Springer, JSTOR, PubMed, arXiv, SSRN, NBER, và báo cáo từ các tổ chức uy tín (IMF, World Bank, OECD, WHO).\n"
+                "2. Với mỗi luận điểm quan trọng, phải dẫn rõ tên tác giả, năm công bố, tên tạp chí và link/DOI của nghiên cứu.\n"
+                "3. Nêu rõ phương pháp luận, số liệu thực nghiệm và đối chiếu các kết quả nghiên cứu mâu thuẫn."
             )
         elif "Tóm tắt" in mode:
             mode_constraint = (
