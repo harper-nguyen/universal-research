@@ -223,32 +223,16 @@ def main():
     # Initialize session history
     if "history" not in st.session_state:
         st.session_state["history"] = []
-    # Initialize research mode state
-    if "selected_mode" not in st.session_state:
-        st.session_state["selected_mode"] = "🌐 Tiêu chuẩn"
-
-    mode_options = [
-        "🌐 Tiêu chuẩn",
-        "🎓 Học thuật chuyên sâu",
-        "⚡ Tóm tắt điều hành",
-    ]
-
-    def _on_sidebar_mode_change():
-        st.session_state["selected_mode"] = st.session_state["mode_sidebar"]
-
-    def _on_main_mode_change():
-        st.session_state["selected_mode"] = st.session_state["mode_main"]
-
-    current_idx = mode_options.index(st.session_state["selected_mode"]) if st.session_state["selected_mode"] in mode_options else 0
-
     with st.sidebar:
         st.markdown("### Cài đặt nghiên cứu")
-        st.radio(
+        mode = st.radio(
             "Chế độ phân tích",
-            mode_options,
-            index=current_idx,
-            key="mode_sidebar",
-            on_change=_on_sidebar_mode_change,
+            [
+                "🌐 Tiêu chuẩn",
+                "🎓 Học thuật chuyên sâu",
+                "⚡ Tóm tắt điều hành",
+            ],
+            index=0,
             help="Chọn mức độ chi tiết và định hướng trọng tâm của báo cáo",
         )
         st.markdown("---")
@@ -270,16 +254,6 @@ def main():
 
         st.markdown("---")
         st.markdown("<small>Universal Research &middot; <code>v0.5</code></small>", unsafe_allow_html=True)
-
-    mode = st.radio(
-        "Chế độ phân tích",
-        mode_options,
-        index=current_idx,
-        key="mode_main",
-        on_change=_on_main_mode_change,
-        horizontal=True,
-        help="Chọn mức độ chi tiết và định hướng trọng tâm của báo cáo",
-    )
 
     question = st.text_area(
         "",
