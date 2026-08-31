@@ -100,21 +100,18 @@ def get_skill_content():
         return None
 
 # Models to try WITH Google Search (automatic fallback order)
+# Model names verified from Google API error messages (2026-08-31)
 MODELS_WITH_SEARCH = [
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
+    "gemini-3.6-flash",
+    "gemini-3.1-pro-preview",
+    "gemini-3.6-flash-8b",
 ]
 
 # Models to try WITHOUT search (broader compatibility fallback)
 MODELS_NO_SEARCH = [
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
+    "gemini-3.6-flash",
+    "gemini-3.1-pro-preview",
+    "gemini-3.6-flash-8b",
 ]
 
 def run_research(
@@ -141,42 +138,52 @@ def run_research(
     tools = [{"google_search": {}}] if use_search else []
     errors = []
 
+    import time
+
     for model in model_list:
-        try:
-            response = client.models.generate_content(
-                model=model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=skill_content,
-                    tools=tools,
-                    temperature=temperature,
-                ),
-            )
-            
-            raw_chunks = None
-            raw_supports = None
+        # Retry once on 503 (transient overload) before moving to next model
+        for attempt in range(2):
             try:
-                meta = response.candidates[0].grounding_metadata
-                raw_chunks = getattr(meta, "grounding_chunks", None)
-                raw_supports = getattr(meta, "grounding_supports", None)
-            except Exception:
-                pass
+                response = client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=skill_content,
+                        tools=tools,
+                        temperature=temperature,
+                    ),
+                )
 
-            sources, chunk_map = citations.build_source_list(raw_chunks)
+                raw_chunks = None
+                raw_supports = None
+                try:
+                    meta = response.candidates[0].grounding_metadata
+                    raw_chunks = getattr(meta, "grounding_chunks", None)
+                    raw_supports = getattr(meta, "grounding_supports", None)
+                except Exception:
+                    pass
 
-            # v0.3+: Enrich sources with academic metadata (Crossref / OpenAlex / Semantic Scholar)
-            sources = enrichment.enrich_sources(sources)
+                sources, chunk_map = citations.build_source_list(raw_chunks)
 
-            annotated_text, inserted = citations.annotate_text_with_citations(
-                response.text, raw_supports, chunk_map
-            )
-            ref_markdown = citations.build_references_markdown(sources, style=citation_style)
+                # v0.3+: Enrich sources with academic metadata (Crossref / OpenAlex)
+                sources = enrichment.enrich_sources(sources)
 
-            return annotated_text, model, sources, ref_markdown, inserted
+                annotated_text, inserted = citations.annotate_text_with_citations(
+                    response.text, raw_supports, chunk_map
+                )
+                ref_markdown = citations.build_references_markdown(sources, style=citation_style)
 
-        except Exception as e:
-            errors.append(f"{model}: {e}")
-            continue
+                return annotated_text, model, sources, ref_markdown, inserted
+
+            except Exception as e:
+                err_str = str(e)
+                # 503 = transient overload — retry once after short wait
+                if "503" in err_str and attempt == 0:
+                    time.sleep(3)
+                    continue
+                # 404 = model not found — skip immediately, no retry
+                errors.append(f"{model}: {e}")
+                break
 
     # Fallback to no-search if search models failed
     if use_search:
