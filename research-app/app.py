@@ -15,8 +15,15 @@ st.set_page_config(page_title="Universal Research", layout="wide")
 st.markdown("""
 <style>
     #MainMenu {visibility: hidden;}
-    header {visibility: hidden;}
     footer {visibility: hidden;}
+    header[data-testid="stHeader"] {
+        background: transparent !important;
+    }
+    /* Ensure sidebar collapse/expand toggle button is visible on mobile & web */
+    [data-testid="stSidebarCollapseButton"], [data-testid="stHeader"] button {
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
     .stTextArea textarea {
         border-radius: 8px;
         border: 1px solid #E0E0E0;
@@ -92,21 +99,22 @@ def get_skill_content():
         st.error(f"Could not load SKILL.md: {e}")
         return None
 
-# Models to try WITH Google Search
+# Models to try WITH Google Search (automatic fallback order)
 MODELS_WITH_SEARCH = [
-    "gemini-3.6-flash",
-    "gemini-3.6-pro",
     "gemini-2.5-flash",
-    "gemini-2.0-flash-exp",
-    "gemini-1.5-flash-latest",
+    "gemini-2.5-pro",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
 ]
 
-# Models to try WITHOUT search (broader compatibility)
+# Models to try WITHOUT search (broader compatibility fallback)
 MODELS_NO_SEARCH = [
-    "gemini-3.6-flash",
-    "gemini-3.6-pro",
-    "gemini-1.5-flash-latest",
-    "gemini-1.5-pro-latest",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
 ]
 
 def run_research(
@@ -220,21 +228,42 @@ def main():
 
     client = genai.Client(api_key=api_key)
 
-    # Initialize session history
+    # Initialize session history & mode selection state
     if "history" not in st.session_state:
         st.session_state["history"] = []
+
+    MODES = [
+        "🌐 Tiêu chuẩn",
+        "🎓 Học thuật chuyên sâu",
+        "⚡ Tóm tắt điều hành",
+    ]
+
+    if "mode_choice" not in st.session_state:
+        st.session_state["mode_choice"] = MODES[0]
+
+    # Main page settings section - ALWAYS visible on both web and mobile
+    st.markdown("### ⚙️ Chế độ nghiên cứu")
+    mode = st.radio(
+        "Chế độ phân tích",
+        [
+            "🌐 Tiêu chuẩn",
+            "🎓 Học thuật chuyên sâu",
+            "⚡ Tóm tắt điều hành",
+        ],
+        index=0,
+        horizontal=True,
+        help="Chọn mức độ chi tiết và định hướng trọng tâm của báo cáo",
+    )
+
     with st.sidebar:
-        st.markdown("### Cài đặt nghiên cứu")
-        mode = st.radio(
-            "Chế độ phân tích",
-            [
-                "🌐 Tiêu chuẩn",
-                "🎓 Học thuật chuyên sâu",
-                "⚡ Tóm tắt điều hành",
-            ],
-            index=0,
-            help="Chọn mức độ chi tiết và định hướng trọng tâm của báo cáo",
-        )
+        st.markdown("### ⚙️ Chế độ đang chọn")
+        st.info(f"**{mode}**")
+        mode_descriptions = {
+            "🌐 Tiêu chuẩn": "Phân tích cân bằng, bao quát đầy đủ thông tin khách quan.",
+            "🎓 Học thuật chuyên sâu": "Tập trung trích dẫn bài báo khoa học, nguồn peer-reviewed, DOI, phương pháp luận.",
+            "⚡ Tóm tắt điều hành": "Tóm tắt ngắn gọn, súc tích, tập trung chỉ số cốt lõi và bài học chiến lược.",
+        }
+        st.markdown(mode_descriptions.get(mode, ""))
         st.markdown("---")
 
         st.markdown("### 📜 Lịch sử phiên")
@@ -431,9 +460,9 @@ def main():
                             client=client,
                             skill_content=skill_content,
                             prompt=fup_prompt,
-                            preferred_model=selected_model,
-                            temperature=temperature,
-                            citation_style=citation_style,
+                            preferred_model=None,
+                            temperature=0.2,
+                            citation_style="APA 7",
                         )
                         active["followups"].append({
                             "question": fup_query,
