@@ -325,12 +325,15 @@ def main():
             )
 
         full_prompt = (
-            f"Nhiệm vụ nghiên cứu: {question}\n\n"
+            f"Nhiệm vụ nghiên cứu / Nội dung do người dùng cung cấp:\n{question}\n\n"
             f"{mode_constraint}\n\n"
+            "CHỈ THỊ QUAN TRỌNG TỪ HỆ THỐNG: \n"
+            "- Nếu người dùng cung cấp một bài viết, bài luận, báo cáo hoặc đoạn văn bản dài, bạn BẮT BUỘC phải ĐỌC, PHÂN TÍCH, ĐÁNH GIÁ PHẢN BIỆN và TƯ DUY SÂU SẮC về nội dung đó dựa trên chuyên môn của bạn.\n"
+            "- TUYỆT ĐỐI KHÔNG ĐƯỢC lặp lại, sao chép hoặc tóm tắt y chang nội dung người dùng đã nhập. Hãy đưa ra góc nhìn chuyên gia, nhận xét điểm mạnh/yếu, hoặc phân tích tính khả thi của các luận điểm trong đó.\n\n"
             "Cấu trúc báo cáo bằng Markdown gồm: "
             "Tóm tắt tổng quan, Các phát hiện chính, Bằng chứng & Nguồn số liệu, "
             "Dữ liệu mâu thuẫn/Chưa chắc chắn, Phân tích chuyên sâu, Kết luận, Hạn chế của nghiên cứu. "
-            "Có thể điều chỉnh cấu trúc linh hoạt cho phù hợp với nội dung câu hỏi."
+            "Có thể điều chỉnh cấu trúc linh hoạt cho phù hợp với nội dung câu hỏi hoặc văn bản được cung cấp."
         )
 
         with st.spinner("Đang nghiên cứu & xác minh nguồn dữ liệu…"):
