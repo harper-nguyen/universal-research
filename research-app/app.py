@@ -1,8 +1,14 @@
 import os
+import json
+import logging
+import time
 import io
-import streamlit as st
+import PyPDF2
+import docx
 from datetime import datetime
-from typing import Optional, List, Dict
+from dotenv import load_dotenv
+
+import streamlit as st
 from google import genai
 from google.genai import types
 
@@ -100,19 +106,35 @@ def get_skill_content():
         return None
 
 # Models to try WITH Google Search (automatic fallback order)
-# Model names verified from Google API error messages (2026-08-31)
 MODELS_WITH_SEARCH = [
     "gemini-3.6-flash",
-    "gemini-3.1-pro-preview",
-    "gemini-3.6-flash-8b",
 ]
 
 # Models to try WITHOUT search (broader compatibility fallback)
 MODELS_NO_SEARCH = [
     "gemini-3.6-flash",
-    "gemini-3.1-pro-preview",
-    "gemini-3.6-flash-8b",
 ]
+
+@st.cache_data(show_spinner=False)
+def extract_file_content(file_bytes: bytes, file_name: str) -> str:
+    """Extract text from file bytes and cache it so it doesn't re-run on every interaction."""
+    import io
+    import PyPDF2
+    import docx
+    
+    file_content = ""
+    try:
+        if file_name.endswith(".txt"):
+            file_content = file_bytes.decode("utf-8", errors="ignore")
+        elif file_name.endswith(".pdf"):
+            pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
+            file_content = "\n".join([page.extract_text() for page in pdf_reader.pages if page.extract_text()])
+        elif file_name.endswith(".docx"):
+            doc = docx.Document(io.BytesIO(file_bytes))
+            file_content = "\n".join([para.text for para in doc.paragraphs])
+    except Exception as e:
+        return f"Lỗi trích xuất: {str(e)}"
+    return file_content
 
 def run_research(
     client,
@@ -141,8 +163,8 @@ def run_research(
     import time
 
     for model in model_list:
-        # Retry once on 503 (transient overload) before moving to next model
-        for attempt in range(2):
+        # Tăng số lần thử lại lên 3 lần cho các lỗi quá tải tạm thời (503)
+        for attempt in range(3):
             try:
                 response = client.models.generate_content(
                     model=model,
@@ -177,13 +199,22 @@ def run_research(
 
             except Exception as e:
                 err_str = str(e)
-                # 503 = transient overload — retry once after short wait
-                if "503" in err_str and attempt == 0:
-                    time.sleep(3)
-                    continue
-                # 404 = model not found — skip immediately, no retry
-                errors.append(f"{model}: {e}")
-                break
+                
+                if "503" in err_str or "UNAVAILABLE" in err_str:
+                    if attempt < 4:  # Retry up to 5 times for 503
+                        time.sleep(4 + attempt * 3) # Backoff: 4s, 7s, 10s, 13s
+                        continue
+                    else:
+                        errors.append(f"{model}: Hệ thống Google AI đang quá tải (Lỗi 503). Vui lòng thử lại sau ít phút.")
+                        break
+                        
+                elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    errors.append(f"{model}: Đã vượt quá giới hạn API miễn phí (Lỗi 429 Quota Exceeded). Bạn không thể dùng model này trong hôm nay.")
+                    break
+                    
+                else:
+                    errors.append(f"{model}: Lỗi không xác định: {err_str}")
+                    break
 
     # Fallback to no-search if search models failed
     if use_search:
@@ -242,6 +273,7 @@ def main():
     MODES = [
         "🌐 Tiêu chuẩn",
         "🎓 Học thuật chuyên sâu",
+        "🕵️ Phản biện chuyên gia",
         "⚡ Tóm tắt điều hành",
     ]
 
@@ -252,11 +284,7 @@ def main():
     st.markdown("### ⚙️ Chế độ nghiên cứu")
     mode = st.radio(
         "Chế độ phân tích",
-        [
-            "🌐 Tiêu chuẩn",
-            "🎓 Học thuật chuyên sâu",
-            "⚡ Tóm tắt điều hành",
-        ],
+        MODES,
         index=0,
         horizontal=True,
         help="Chọn mức độ chi tiết và định hướng trọng tâm của báo cáo",
@@ -268,9 +296,18 @@ def main():
         mode_descriptions = {
             "🌐 Tiêu chuẩn": "Phân tích cân bằng, bao quát đầy đủ thông tin khách quan.",
             "🎓 Học thuật chuyên sâu": "Tập trung trích dẫn bài báo khoa học, nguồn peer-reviewed, DOI, phương pháp luận.",
+            "🕵️ Phản biện chuyên gia": "Đóng vai chuyên gia khó tính, đánh giá điểm yếu, lỗ hổng logic và tính khả thi của văn bản.",
             "⚡ Tóm tắt điều hành": "Tóm tắt ngắn gọn, súc tích, tập trung chỉ số cốt lõi và bài học chiến lược.",
         }
         st.markdown(mode_descriptions.get(mode, ""))
+        st.markdown("---")
+        
+        st.markdown("### 🧠 Tùy chọn nâng cao")
+        deep_thinking = st.checkbox(
+            "Bật Tư duy Sâu (Chain-of-Thought)",
+            value=False,
+            help="Yêu cầu AI lập dàn ý và suy luận chi tiết trước khi đưa ra kết luận (sẽ hiển thị trong một thẻ ẩn)."
+        )
         st.markdown("---")
 
         st.markdown("### 📜 Lịch sử phiên")
@@ -297,13 +334,30 @@ def main():
         height=120,
     )
 
+    uploaded_file = st.file_uploader("Đính kèm tài liệu (tuỳ chọn - PDF, DOCX, TXT)", type=["pdf", "docx", "txt"])
+    file_content = ""
+    if uploaded_file is not None:
+        with st.spinner(f"Đang đọc tài liệu {uploaded_file.name}..."):
+            file_bytes = uploaded_file.getvalue()
+            file_content = extract_file_content(file_bytes, uploaded_file.name)
+            
+            if file_content.startswith("Lỗi trích xuất:"):
+                st.error(file_content)
+                file_content = ""
+            else:
+                st.success(f"Đã trích xuất thành công {len(file_content)} ký tự từ {uploaded_file.name}")
+
     col1, col2 = st.columns([1, 5])
     run_clicked = col1.button("Run Analysis", type="primary")
 
     if run_clicked:
-        if not question.strip():
-            st.warning("Please enter a research question.")
+        if not question.strip() and not file_content.strip():
+            st.warning("Please enter a research question or upload a document.")
             return
+            
+        combined_question = question.strip()
+        if file_content.strip():
+            combined_question += f"\n\n--- NỘI DUNG TÀI LIỆU ĐÍNH KÈM ---\n{file_content}"
         if "Học thuật" in mode:
             mode_constraint = (
                 "CHẾ ĐỘ: PHÂN TÍCH HỌC THUẬT CHUYÊN SÂU (ACADEMIC DEEP DIVE).\n"
@@ -312,6 +366,14 @@ def main():
                 "bài báo từ Google Scholar, Nature, ScienceDirect, Springer, JSTOR, PubMed, arXiv, SSRN, NBER, và báo cáo từ các tổ chức uy tín (IMF, World Bank, OECD, WHO).\n"
                 "2. Với mỗi luận điểm quan trọng, phải dẫn rõ tên tác giả, năm công bố, tên tạp chí và link/DOI của nghiên cứu.\n"
                 "3. Nêu rõ phương pháp luận, số liệu thực nghiệm và đối chiếu các kết quả nghiên cứu mâu thuẫn."
+            )
+        elif "Phản biện" in mode:
+            mode_constraint = (
+                "CHẾ ĐỘ: PHẢN BIỆN CHUYÊN GIA (EXPERT CRITIQUE).\n"
+                "YÊU CẦU ĐÁNH GIÁ:\n"
+                "1. Đóng vai một chuyên gia/giáo sư khó tính đang chấm điểm báo cáo, bài luận hoặc dự án.\n"
+                "2. Tập trung vạch ra các lỗ hổng logic, điểm mâu thuẫn, giả định sai lầm hoặc thiếu sót thực chứng trong văn bản.\n"
+                "3. Bắt buộc phải có giải pháp hoặc đề xuất tái cấu trúc thay vì chỉ chê bai."
             )
         elif "Tóm tắt" in mode:
             mode_constraint = (
@@ -324,9 +386,17 @@ def main():
                 "Yêu cầu: Khách quan, cân bằng, bao quát toàn diện các khía cạnh của chủ đề kèm dẫn chứng xác minh."
             )
 
+        thinking_instruction = ""
+        if deep_thinking:
+            thinking_instruction = (
+                "\nBẮT BUỘC: Bạn PHẢI BẮT ĐẦU câu trả lời của mình bằng việc suy luận đa bước, lập dàn ý và đánh giá thông tin "
+                "bên trong thẻ <thinking> và kết thúc bằng </thinking>. Sau đó mới viết báo cáo chính.\n"
+            )
+
         full_prompt = (
-            f"Nhiệm vụ nghiên cứu / Nội dung do người dùng cung cấp:\n{question}\n\n"
-            f"{mode_constraint}\n\n"
+            f"Nhiệm vụ nghiên cứu / Nội dung do người dùng cung cấp:\n{combined_question}\n\n"
+            f"{mode_constraint}\n"
+            f"{thinking_instruction}\n"
             "CHỈ THỊ QUAN TRỌNG TỪ HỆ THỐNG: \n"
             "- Nếu người dùng cung cấp một bài viết, bài luận, báo cáo hoặc đoạn văn bản dài, bạn BẮT BUỘC phải ĐỌC, PHÂN TÍCH, ĐÁNH GIÁ PHẢN BIỆN và TƯ DUY SÂU SẮC về nội dung đó dựa trên chuyên môn của bạn.\n"
             "- TUYỆT ĐỐI KHÔNG ĐƯỢC lặp lại, sao chép hoặc tóm tắt y chang nội dung người dùng đã nhập. Hãy đưa ra góc nhìn chuyên gia, nhận xét điểm mạnh/yếu, hoặc phân tích tính khả thi của các luận điểm trong đó.\n\n"
@@ -349,7 +419,7 @@ def main():
 
                 # Save to history
                 report_data = {
-                    "question": question,
+                    "question": combined_question,
                     "result_text": result_text,
                     "model_used": model_used,
                     "sources": sources,
@@ -392,7 +462,17 @@ def main():
             tab_sources = None
 
         with tab_report:
-            st.markdown(active["result_text"])
+            result_display = active["result_text"]
+            if "<thinking>" in result_display and "</thinking>" in result_display:
+                start_idx = result_display.find("<thinking>") + len("<thinking>")
+                end_idx = result_display.find("</thinking>")
+                thinking_content = result_display[start_idx:end_idx].strip()
+                result_display = result_display[:result_display.find("<thinking>")] + result_display[end_idx + len("</thinking>"):]
+                
+                with st.expander("🤔 Xem quá trình tư duy của AI (Chain-of-Thought)"):
+                    st.markdown(thinking_content)
+            
+            st.markdown(result_display.strip())
 
             # Render follow-up additions if any
             for fup in active.get("followups", []):

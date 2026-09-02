@@ -8,3 +8,5 @@ google-genai
 
 # Đọc biến môi trường từ file .env (dùng khi chạy local)
 python-dotenv
+PyPDF2
+python-docx
