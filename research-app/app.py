@@ -157,14 +157,13 @@ def run_research(
     else:
         model_list = base_list
 
-    tools = [{"google_search": {}}] if use_search else []
+    tools = [{"google_search": {}} ] if use_search else []
     errors = []
-
-    import time
+    model_overloaded = False  # Track if 503 is persisting across all retries
 
     for model in model_list:
-        # Tăng số lần thử lại lên 3 lần cho các lỗi quá tải tạm thời (503)
-        for attempt in range(3):
+        MAX_RETRIES = 5
+        for attempt in range(MAX_RETRIES):
             try:
                 response = client.models.generate_content(
                     model=model,
@@ -199,26 +198,31 @@ def run_research(
 
             except Exception as e:
                 err_str = str(e)
-                
+
                 if "503" in err_str or "UNAVAILABLE" in err_str:
-                    if attempt < 4:  # Retry up to 5 times for 503
-                        time.sleep(4 + attempt * 3) # Backoff: 4s, 7s, 10s, 13s
+                    if attempt < MAX_RETRIES - 1:
+                        wait = 5 + attempt * 5  # Backoff: 5s, 10s, 15s, 20s
+                        time.sleep(wait)
                         continue
                     else:
-                        errors.append(f"{model}: Hệ thống Google AI đang quá tải (Lỗi 503). Vui lòng thử lại sau ít phút.")
+                        errors.append(f"{model}: Hệ thống Google AI đang quá tải (503). Đã thử lại {MAX_RETRIES} lần mà không thành công.")
+                        model_overloaded = True
                         break
-                        
+
                 elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    errors.append(f"{model}: Đã vượt quá giới hạn API miễn phí (Lỗi 429 Quota Exceeded). Bạn không thể dùng model này trong hôm nay.")
-                    break
-                    
-                else:
-                    errors.append(f"{model}: Lỗi không xác định: {err_str}")
+                    errors.append(f"{model}: Hết hạn mức API miễn phí hôm nay (429). Vui lòng thử lại vào ngày mai hoặc nâng cấp API key.")
                     break
 
-    # Fallback to no-search if search models failed
-    if use_search:
-        st.info("ℹ️ Web search unavailable; falling back to knowledge-base analysis.")
+                elif "404" in err_str or "NOT_FOUND" in err_str:
+                    errors.append(f"{model}: Model không tồn tại (404).")
+                    break
+
+                else:
+                    errors.append(f"{model}: {err_str[:200]}")
+                    break
+
+    # Only fallback to no-search if it wasn't a persistent 503 (pointless to retry same overloaded model)
+    if use_search and not model_overloaded:
         return run_research(
             client,
             skill_content,
